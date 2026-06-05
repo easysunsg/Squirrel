@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>松鼠筑巢 - 智能家居管家</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&amp;family=Plus+Jakarta+Sans:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                "on-primary": "#ffffff",
+                "surface-dim": "#dcd9d9",
+                "outline": "#8e6f75",
+                "on-secondary-fixed-variant": "#005313",
+                "on-surface": "#1b1c1c",
+                "surface-container-lowest": "#ffffff",
+                "inverse-surface": "#303030",
+                "tertiary-fixed-dim": "#dbc90a",
+                "primary-fixed": "#ffd9df",
+                "on-error-container": "#93000a",
+                "outline-variant": "#e2bdc3",
+                "on-tertiary-fixed": "#201c00",
+                "on-error": "#ffffff",
+                "on-tertiary": "#ffffff",
+                "surface-container-highest": "#e5e2e1",
+                "surface-container": "#f0eded",
+                "background": "#fcf9f8",
+                "surface-variant": "#e5e2e1",
+                "secondary-fixed": "#94f990",
+                "on-secondary-container": "#00731e",
+                "surface": "#fcf9f8",
+                "on-primary-fixed": "#3f0018",
+                "on-secondary-fixed": "#002204",
+                "on-secondary": "#ffffff",
+                "surface-container-high": "#eae7e7",
+                "primary-container": "#dd2269",
+                "primary": "#b70052",
+                "tertiary-fixed": "#f9e534",
+                "tertiary": "#695f00",
+                "error-container": "#ffdad6",
+                "on-primary-fixed-variant": "#8f003f",
+                "surface-tint": "#bb0054",
+                "secondary-container": "#91f78e",
+                "inverse-on-surface": "#f3f0ef",
+                "on-tertiary-fixed-variant": "#4f4800",
+                "on-primary-container": "#fffbff",
+                "secondary": "#006e1c",
+                "inverse-primary": "#ffb1c1",
+                "tertiary-container": "#bdad00",
+                "surface-container-low": "#f6f3f2",
+                "secondary-fixed-dim": "#78dc77",
+                "surface-bright": "#fcf9f8",
+                "primary-fixed-dim": "#ffb1c1",
+                "on-background": "#1b1c1c",
+                "error": "#ba1a1a",
+                "on-tertiary-container": "#474000",
+                "on-surface-variant": "#5a4045"
+            },
+            "borderRadius": {
+                "DEFAULT": "1rem",
+                "lg": "2rem",
+                "xl": "3rem",
+                "full": "9999px"
+            },
+            "spacing": {
+                "stroke-weight": "2px",
+                "margin-desktop": "40px",
+                "margin-mobile": "20px",
+                "gutter": "16px",
+                "unit": "8px"
+            },
+            "fontFamily": {
+                "label-bold": ["Plus Jakarta Sans"],
+                "body-md": ["Plus Jakarta Sans"],
+                "display-lg": ["Bricolage Grotesque"],
+                "headline-lg": ["Bricolage Grotesque"],
+                "body-lg": ["Plus Jakarta Sans"],
+                "headline-lg-mobile": ["Bricolage Grotesque"]
+            },
+            "fontSize": {
+                "label-bold": ["14px", {"lineHeight": "1.2", "fontWeight": "700"}],
+                "body-md": ["16px", {"lineHeight": "1.5", "fontWeight": "400"}],
+                "display-lg": ["48px", {"lineHeight": "1.1", "letterSpacing": "-0.02em", "fontWeight": "800"}],
+                "headline-lg": ["32px", {"lineHeight": "1.2", "fontWeight": "700"}],
+                "body-lg": ["18px", {"lineHeight": "1.6", "fontWeight": "500"}],
+                "headline-lg-mobile": ["28px", {"lineHeight": "1.2", "fontWeight": "700"}]
+            }
+          }
+        }
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .doodle-border {
+            border: 2px solid #1b1c1c;
+        }
+        .hard-shadow {
+            box-shadow: 4px 4px 0px 0px #1b1c1c;
+        }
+        .hard-shadow-sm {
+            box-shadow: 2px 2px 0px 0px #1b1c1c;
+        }
+        .interaction-pop:active {
+            transform: translate(2px, 2px);
+            box-shadow: 0px 0px 0px 0px #1b1c1c;
+        }
+        .rotate-mild {
+            transform: rotate(-1deg);
+        }
+        .rotate-mild-alt {
+            transform: rotate(1.5deg);
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-md selection:bg-primary-fixed">
+<!-- TopNavBar -->
+<header class="flex justify-between items-center w-full px-margin-desktop py-4 bg-background fixed top-0 z-50 border-b-2 border-on-surface shadow-[4px_4px_0px_0px_rgba(27,28,28,1)]">
+<div class="flex items-center gap-4">
+<div class="text-headline-lg font-headline-lg font-black text-on-surface border-2 border-on-surface px-4 py-1 rounded-full rotate-[-1deg] bg-tertiary-fixed">松鼠筑巢</div>
+</div>
+<div class="flex items-center gap-6">
+<div class="hidden md:flex gap-4">
+<span class="text-primary font-bold font-label-bold cursor-pointer hover:translate-y-0.5 hover:translate-x-0.5 transition-transform">仪表盘</span>
+<span class="text-on-surface-variant font-label-bold cursor-pointer hover:translate-y-0.5 hover:translate-x-0.5 transition-transform">库存</span>
+<span class="text-on-surface-variant font-label-bold cursor-pointer hover:translate-y-0.5 hover:translate-x-0.5 transition-transform">实验室</span>
+</div>
+<div class="flex items-center gap-3">
+<button class="material-symbols-outlined text-on-surface hover:scale-110 transition-transform" data-icon="notifications">notifications</button>
+<div class="w-10 h-10 rounded-full doodle-border bg-primary-fixed overflow-hidden flex items-center justify-center">
+<span class="material-symbols-outlined" data-icon="account_circle">account_circle</span>
+</div>
+</div>
+</div>
+</header>
+<!-- Sidebar (Desktop Only) -->
+<aside class="hidden md:flex flex-col fixed left-0 top-0 h-full w-64 z-40 bg-surface-container-low border-r-2 border-on-surface pt-24">
+<div class="px-4 mb-8">
+<div class="font-headline-lg text-headline-lg text-primary mb-1">松鼠筑巢</div>
+<div class="font-body-lg text-body-lg text-on-surface-variant">智能家居管家</div>
+</div>
+<nav class="flex-grow">
+<a class="bg-secondary-container text-on-secondary-container border-2 border-on-surface rounded-lg shadow-[2px_2px_0px_0px_rgba(27,28,28,1)] m-2 flex items-center gap-2 p-3 font-label-bold text-label-bold transition-transform active:translate-y-px" href="#">
+<span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>仪表盘
+            </a>
+<a class="text-on-surface-variant flex items-center gap-2 p-3 m-2 hover:bg-surface-container-high rounded-lg font-label-bold text-label-bold transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="smart_toy">smart_toy</span>AI 助手
+            </a>
+<a class="text-on-surface-variant flex items-center gap-2 p-3 m-2 hover:bg-surface-container-high rounded-lg font-label-bold text-label-bold transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="inventory_2">inventory_2</span>库存管理
+            </a>
+<a class="text-on-surface-variant flex items-center gap-2 p-3 m-2 hover:bg-surface-container-high rounded-lg font-label-bold text-label-bold transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>设置
+            </a>
+</nav>
+<div class="p-4 border-t-2 border-on-surface mt-auto">
+<button class="w-full doodle-border bg-tertiary-fixed py-2 rounded-lg hard-shadow-sm font-label-bold text-label-bold interaction-pop mb-4">查看数据库 MD</button>
+<div class="flex flex-col gap-2">
+<a class="flex items-center gap-2 text-on-surface-variant text-label-bold px-2 hover:text-primary" href="#"><span class="material-symbols-outlined" data-icon="info">info</span>关于</a>
+<a class="flex items-center gap-2 text-on-surface-variant text-label-bold px-2 hover:text-primary" href="#"><span class="material-symbols-outlined" data-icon="logout">logout</span>退出</a>
+</div>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="pt-24 md:pl-64 min-h-screen px-4 md:px-margin-desktop pb-20">
+<div class="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-8 mt-8">
+<!-- Left Column: Focus & Alerts (7 cols) -->
+<div class="md:col-span-7 space-y-8">
+<!-- AI Input Capsule -->
+<section class="bg-surface-container-highest doodle-border p-6 rounded-xl hard-shadow rotate-mild bg-white">
+<div class="flex items-center gap-3 mb-4">
+<span class="bg-primary text-white p-2 rounded-full material-symbols-outlined" data-icon="bolt">bolt</span>
+<h2 class="font-headline-lg text-headline-lg text-on-surface">闪电录入</h2>
+</div>
+<div class="relative">
+<textarea class="w-full doodle-border p-4 rounded-lg font-body-md focus:ring-primary focus:border-primary min-h-[100px] resize-none" placeholder="输入你想存入的东西，或者刚才吃掉的东西..."></textarea>
+<button class="absolute bottom-4 right-4 bg-primary text-white px-6 py-2 rounded-full font-label-bold hard-shadow-sm interaction-pop">
+                            搞定！
+                        </button>
+</div>
+</section>
+<!-- Status Cards (Red/Yellow/Grey) -->
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+<div class="doodle-border border-error p-4 rounded-xl hard-shadow bg-error-container rotate-mild-alt">
+<div class="text-error font-headline-lg text-headline-lg mb-1">03</div>
+<div class="text-on-error-container font-label-bold text-label-bold uppercase">库存告罄</div>
+<p class="text-on-error-container text-sm mt-2">快去补货：牛奶、鸡蛋、洗洁精</p>
+</div>
+<div class="doodle-border border-tertiary p-4 rounded-xl hard-shadow bg-tertiary-fixed rotate-mild">
+<div class="text-tertiary font-headline-lg text-headline-lg mb-1">08</div>
+<div class="text-on-tertiary-container font-label-bold text-label-bold uppercase">低库存预警</div>
+<p class="text-on-tertiary-container text-sm mt-2">坚果还剩一小把了</p>
+</div>
+<div class="doodle-border border-on-surface-variant p-4 rounded-xl hard-shadow bg-surface-variant">
+<div class="text-on-surface-variant font-headline-lg text-headline-lg mb-1">24</div>
+<div class="text-on-surface-variant font-label-bold text-label-bold uppercase">近期无变动</div>
+<p class="text-on-surface-variant text-sm mt-2">储物间里的旧玩具</p>
+</div>
+</div>
+<!-- AI Recipe Recommendation -->
+<section class="bg-secondary-fixed doodle-border p-6 rounded-2xl hard-shadow relative overflow-hidden">
+<div class="relative z-10">
+<div class="bg-on-secondary-fixed text-white inline-block px-3 py-1 rounded-full text-xs font-label-bold mb-3">AI 厨房推荐</div>
+<h3 class="font-headline-lg text-headline-lg text-on-secondary-fixed mb-2">松鼠今日食谱：番茄牛腩</h3>
+<p class="text-on-secondary-fixed-variant font-body-lg mb-6">根据你的冰箱存货，我们发现番茄还剩2个，牛肉需要尽快吃掉。再配上仓库里的洋葱，完美！</p>
+<div class="flex gap-4">
+<button class="bg-on-surface text-white px-6 py-2 rounded-full font-label-bold interaction-pop">开始烹饪</button>
+<button class="bg-white doodle-border px-6 py-2 rounded-full font-label-bold hard-shadow-sm interaction-pop">换一个</button>
+</div>
+</div>
+<!-- Illustrative squirrel placeholder -->
+<div class="absolute -bottom-4 -right-4 opacity-20">
+<span class="material-symbols-outlined text-[160px]" data-icon="pets">pets</span>
+</div>
+</section>
+</div>
+<!-- Right Column: Shortcuts & Space (5 cols) -->
+<div class="md:col-span-5 space-y-8">
+<!-- Quick Access List -->
+<section class="bg-white doodle-border p-6 rounded-2xl hard-shadow">
+<div class="flex justify-between items-center mb-6">
+<h2 class="font-headline-lg text-headline-lg">松鼠洞空间</h2>
+<button class="material-symbols-outlined text-primary" data-icon="add_circle">add_circle</button>
+</div>
+<div class="space-y-4">
+<!-- Space Item 1 -->
+<div class="group border-b-2 border-on-surface pb-4 last:border-0">
+<div class="flex justify-between items-start mb-2">
+<div class="flex items-center gap-3">
+<div class="w-12 h-12 rounded-lg doodle-border bg-primary-fixed flex items-center justify-center">
+<span class="material-symbols-outlined text-primary" data-icon="kitchen">kitchen</span>
+</div>
+<div>
+<div class="font-headline-lg text-body-lg font-bold">主厨房</div>
+<div class="text-sm text-on-surface-variant">42 件物品 · 3件过期预警</div>
+</div>
+</div>
+<div class="flex gap-2">
+<button class="bg-secondary-container p-2 rounded-full hard-shadow-sm hover:translate-y-px transition-transform" title="标记已食用">
+<span class="material-symbols-outlined text-on-secondary-container" data-icon="restaurant">restaurant</span>
+</button>
+<button class="bg-error-container p-2 rounded-full hard-shadow-sm hover:translate-y-px transition-transform" title="标记已丢弃">
+<span class="material-symbols-outlined text-on-error-container" data-icon="delete">delete</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Space Item 2 -->
+<div class="group border-b-2 border-on-surface pb-4 last:border-0">
+<div class="flex justify-between items-start mb-2">
+<div class="flex items-center gap-3">
+<div class="w-12 h-12 rounded-lg doodle-border bg-tertiary-fixed flex items-center justify-center">
+<span class="material-symbols-outlined text-tertiary" data-icon="shelves">shelves</span>
+</div>
+<div>
+<div class="font-headline-lg text-body-lg font-bold">储藏间</div>
+<div class="text-sm text-on-surface-variant">128 件物品 · 整理进度 80%</div>
+</div>
+</div>
+<div class="flex gap-2">
+<button class="bg-surface-container-high p-2 rounded-full hard-shadow-sm hover:translate-y-px transition-transform">
+<span class="material-symbols-outlined" data-icon="arrow_forward">arrow_forward</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Space Item 3 -->
+<div class="group border-b-2 border-on-surface pb-4 last:border-0">
+<div class="flex justify-between items-start mb-2">
+<div class="flex items-center gap-3">
+<div class="w-12 h-12 rounded-lg doodle-border bg-secondary-fixed flex items-center justify-center">
+<span class="material-symbols-outlined text-secondary" data-icon="garage">garage</span>
+</div>
+<div>
+<div class="font-headline-lg text-body-lg font-bold">车库工具</div>
+<div class="text-sm text-on-surface-variant">15 件物品 · 1件借出</div>
+</div>
+</div>
+<div class="flex gap-2">
+<button class="bg-surface-container-high p-2 rounded-full hard-shadow-sm hover:translate-y-px transition-transform">
+<span class="material-symbols-outlined" data-icon="arrow_forward">arrow_forward</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+<button class="w-full mt-6 py-3 bg-on-surface text-white rounded-xl font-label-bold hover:bg-primary transition-colors">管理所有空间</button>
+</section>
+<!-- Fun Interactive Element -->
+<div class="bg-white border-2 border-on-surface p-4 rounded-xl rotate-mild relative overflow-hidden group hover:rotate-0 transition-transform cursor-pointer">
+<img alt="Organized nuts" class="w-full h-32 object-cover rounded-lg doodle-border mb-4" data-alt="A playful, hand-drawn illustration style image featuring a whimsical squirrel meticulously organizing various acorns and nuts into neat wooden compartments. The lighting is warm and bright, with a vibrant color palette of earthy browns, sunny yellows, and forest greens. The overall aesthetic is energetic and tidy, reflecting a joyful take on home organization and storage." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBrvL6Z9qWB64q_7NZjwUnb1OPePEf_SsNMPwMlOgniChblQS7ECnRsK5LI9ahwABdockbm2A5edXKwmyYXVE4K_gBEEwBUnGWlYQueowLAPIDC87dslBBpVLDTYU9IZ0Coa8s9UjrrYzsGh4MuoE4wD4IrHe_Ndjj5cr0h1pLRcRWuNkugRH8GItCL-oh_TT7jt6jHPRwgA0Ofi5jIeWiNZKWU6labtjbOPPiJfL2hg-DGPvwNsJjuv9q8L0QJMqP8MY3lCPiDd4yD"/>
+<div class="font-label-bold text-primary">松鼠的小贴士</div>
+<p class="text-sm">“别把种子放进潮湿的柜子里，除非你想在厨房里种树！”</p>
+</div>
+</div>
+</div>
+</main>
+<!-- Footer -->
+<footer class="w-full py-unit-4 px-margin-desktop flex flex-col md:flex-row justify-between items-center border-t-2 border-on-surface bg-surface-container-lowest mt-12 gap-4">
+<div class="flex flex-col md:flex-row items-center gap-6">
+<span class="font-bold text-primary text-headline-lg">松鼠筑巢</span>
+<div class="flex gap-4">
+<a class="text-on-surface-variant font-label-bold text-label-bold hover:text-primary transition-colors" href="#">隐私政策</a>
+<a class="text-on-surface-variant font-label-bold text-label-bold hover:text-primary transition-colors" href="#">使用条款</a>
+<a class="text-on-surface-variant font-label-bold text-label-bold hover:text-primary transition-colors" href="#">联系我们</a>
+</div>
+</div>
+<div class="flex items-center gap-6">
+<div class="flex gap-3">
+<span class="material-symbols-outlined text-on-surface hover:text-primary cursor-pointer" data-icon="share">share</span>
+<span class="material-symbols-outlined text-on-surface hover:text-primary cursor-pointer" data-icon="chat">chat</span>
+</div>
+<div class="text-on-surface-variant font-label-bold text-label-bold">© 2024 松鼠筑巢 - 玩转整理</div>
+</div>
+</footer>
+<!-- Mobile Navigation Bar -->
+<nav class="md:hidden fixed bottom-0 left-0 right-0 bg-background border-t-2 border-on-surface px-6 py-3 flex justify-between items-center z-50">
+<button class="flex flex-col items-center gap-1 text-primary">
+<span class="material-symbols-outlined" data-icon="dashboard" style="font-variation-settings: 'FILL' 1;">dashboard</span>
+<span class="text-[10px] font-label-bold">仪表盘</span>
+</button>
+<button class="flex flex-col items-center gap-1 text-on-surface-variant">
+<span class="material-symbols-outlined" data-icon="inventory_2">inventory_2</span>
+<span class="text-[10px] font-label-bold">库存</span>
+</button>
+<button class="flex flex-col items-center gap-1 -mt-8">
+<div class="w-14 h-14 bg-primary text-white rounded-full doodle-border hard-shadow-sm flex items-center justify-center">
+<span class="material-symbols-outlined text-3xl" data-icon="add">add</span>
+</div>
+</button>
+<button class="flex flex-col items-center gap-1 text-on-surface-variant">
+<span class="material-symbols-outlined" data-icon="smart_toy">smart_toy</span>
+<span class="text-[10px] font-label-bold">助手</span>
+</button>
+<button class="flex flex-col items-center gap-1 text-on-surface-variant">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span class="text-[10px] font-label-bold">设置</span>
+</button>
+</nav>
+<script>
+        // Micro-interaction: Subtle hover effects on buttons
+        document.querySelectorAll('.interaction-pop').forEach(btn => {
+            btn.addEventListener('mousedown', () => {
+                btn.classList.add('translate-y-0.5', 'translate-x-0.5');
+                btn.style.boxShadow = 'none';
+            });
+            btn.addEventListener('mouseup', () => {
+                btn.classList.remove('translate-y-0.5', 'translate-x-0.5');
+                btn.style.boxShadow = btn.classList.contains('hard-shadow-sm') ? '2px 2px 0px 0px #1b1c1c' : '4px 4px 0px 0px #1b1c1c';
+            });
+            btn.addEventListener('mouseleave', () => {
+                btn.classList.remove('translate-y-0.5', 'translate-x-0.5');
+                btn.style.boxShadow = btn.classList.contains('hard-shadow-sm') ? '2px 2px 0px 0px #1b1c1c' : '4px 4px 0px 0px #1b1c1c';
+            });
+        });
+    </script>
+</body></html>

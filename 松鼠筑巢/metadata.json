@@ -1,0 +1,6 @@
+{
+  "name": "松鼠筑巢",
+  "description": "松鼠筑巢智能家居管家，可爱的涂鸦风手绘感生活整理与库存管理系统，配备闪电录入、AI智能排期食谱与库存洞空间整理助手。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

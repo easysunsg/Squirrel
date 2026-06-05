@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>松鼠筑巢 - 设置向导</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&amp;family=Plus+Jakarta+Sans:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 48;
+        }
+        
+        /* Custom range slider styling to match Doodle-Core */
+        input[type='range'] {
+            -webkit-appearance: none;
+            appearance: none;
+            background: transparent;
+            cursor: pointer;
+        }
+        input[type='range']::-webkit-slider-runnable-track {
+            background: #1b1c1c;
+            height: 4px;
+            border-radius: 2px;
+        }
+        input[type='range']::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            margin-top: -10px;
+            background-color: #f9e534;
+            border: 2px solid #1b1c1c;
+            height: 24px;
+            width: 24px;
+            border-radius: 50%;
+            box-shadow: 2px 2px 0px 0px rgba(27,28,28,1);
+        }
+
+        .doodle-card {
+            transition: transform 0.1s ease-in-out;
+        }
+        .doodle-card:active {
+            transform: translate(2px, 2px);
+        }
+
+        @keyframes float {
+            0% { transform: translateY(0px) rotate(-1deg); }
+            50% { transform: translateY(-10px) rotate(1deg); }
+            100% { transform: translateY(0px) rotate(-1deg); }
+        }
+        .floating-squirrel {
+            animation: float 4s ease-in-out infinite;
+        }
+    </style>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "surface-tint": "#bb0054",
+                      "tertiary-fixed": "#f9e534",
+                      "surface-container-high": "#eae7e7",
+                      "secondary-fixed-dim": "#78dc77",
+                      "on-tertiary": "#ffffff",
+                      "outline-variant": "#e2bdc3",
+                      "error-container": "#ffdad6",
+                      "outline": "#8e6f75",
+                      "on-tertiary-fixed": "#201c00",
+                      "on-background": "#1b1c1c",
+                      "on-secondary-fixed-variant": "#005313",
+                      "surface-dim": "#dcd9d9",
+                      "secondary-fixed": "#94f990",
+                      "surface-container": "#f0eded",
+                      "on-tertiary-container": "#474000",
+                      "on-primary": "#ffffff",
+                      "secondary": "#006e1c",
+                      "inverse-primary": "#ffb1c1",
+                      "on-primary-fixed": "#3f0018",
+                      "primary-fixed-dim": "#ffb1c1",
+                      "inverse-surface": "#303030",
+                      "on-secondary-container": "#00731e",
+                      "error": "#ba1a1a",
+                      "on-secondary": "#ffffff",
+                      "secondary-container": "#91f78e",
+                      "tertiary": "#695f00",
+                      "surface-container-lowest": "#ffffff",
+                      "surface-variant": "#e5e2e1",
+                      "primary-fixed": "#ffd9df",
+                      "primary-container": "#dd2269",
+                      "on-secondary-fixed": "#002204",
+                      "tertiary-fixed-dim": "#dbc90a",
+                      "surface-container-highest": "#e5e2e1",
+                      "surface-bright": "#fcf9f8",
+                      "on-surface-variant": "#5a4045",
+                      "on-primary-fixed-variant": "#8f003f",
+                      "on-primary-container": "#fffbff",
+                      "surface": "#fcf9f8",
+                      "on-error-container": "#93000a",
+                      "surface-container-low": "#f6f3f2",
+                      "on-surface": "#1b1c1c",
+                      "tertiary-container": "#bdad00",
+                      "on-error": "#ffffff",
+                      "on-tertiary-fixed-variant": "#4f4800",
+                      "inverse-on-surface": "#f3f0ef",
+                      "primary": "#b70052",
+                      "background": "#fcf9f8"
+              },
+              "borderRadius": {
+                      "DEFAULT": "1rem",
+                      "lg": "2rem",
+                      "xl": "3rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "stroke-weight": "2px",
+                      "margin-mobile": "20px",
+                      "margin-desktop": "40px",
+                      "gutter": "16px",
+                      "unit": "8px"
+              },
+              "fontFamily": {
+                      "label-bold": ["Plus Jakarta Sans"],
+                      "headline-lg": ["Bricolage Grotesque"],
+                      "headline-lg-mobile": ["Bricolage Grotesque"],
+                      "display-lg": ["Bricolage Grotesque"],
+                      "body-lg": ["Plus Jakarta Sans"],
+                      "body-md": ["Plus Jakarta Sans"]
+              },
+              "fontSize": {
+                      "label-bold": ["14px", {"lineHeight": "1.2", "fontWeight": "700"}],
+                      "headline-lg": ["32px", {"lineHeight": "1.2", "fontWeight": "700"}],
+                      "headline-lg-mobile": ["28px", {"lineHeight": "1.2", "fontWeight": "700"}],
+                      "display-lg": ["48px", {"lineHeight": "1.1", "letterSpacing": "-0.02em", "fontWeight": "800"}],
+                      "body-lg": ["18px", {"lineHeight": "1.6", "fontWeight": "500"}],
+                      "body-md": ["16px", {"lineHeight": "1.5", "fontWeight": "400"}]
+              }
+            },
+          },
+        }
+    </script>
+</head>
+<body class="bg-background text-on-surface min-h-screen font-body-md overflow-x-hidden">
+<!-- Suppressed Header for focus task -->
+<div class="fixed top-0 left-0 w-full z-50 px-margin-desktop py-4 flex justify-between items-center pointer-events-none">
+<div class="bg-tertiary-fixed border-2 border-on-surface px-4 py-1 rounded-full rotate-[-2deg] shadow-[4px_4px_0px_0px_rgba(27,28,28,1)] pointer-events-auto">
+<span class="font-headline-lg text-headline-lg font-black">松鼠筑巢</span>
+</div>
+<div class="flex items-center gap-4 pointer-events-auto">
+<div class="bg-surface border-2 border-on-surface px-4 py-2 rounded-full shadow-[2px_2px_0px_0px_rgba(27,28,28,1)]">
+<span class="font-label-bold text-label-bold">步骤 2 / 3</span>
+</div>
+</div>
+</div>
+<main class="max-w-4xl mx-auto px-margin-mobile md:px-margin-desktop pt-32 pb-24">
+<!-- Hero Section -->
+<header class="mb-12 relative">
+<div class="relative z-10">
+<h1 class="font-display-lg text-display-lg mb-4 text-on-surface">松鼠管家性格与<br/>主人偏好设定</h1>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-md">为了更好地照顾您的生活，请告诉松鼠您的偏好。</p>
+</div>
+<!-- Decorative Mascot -->
+<div class="absolute -top-12 -right-8 md:-right-20 w-48 md:w-64 floating-squirrel z-0 opacity-90">
+<img alt="松鼠管家吉祥物" class="w-full h-auto drop-shadow-xl" data-alt="A friendly, chubby squirrel mascot with a chef's hat, holding a small nut, in a playful hand-drawn illustration style with bold outlines and vibrant colors. The background is a warm yellow color with subtle textured patterns that look like recycled paper. The lighting is bright and cheerful, emphasizing the high-contrast aesthetic." src="https://lh3.googleusercontent.com/aida/AP1WRLsag-hLZk-TTTr4isciitH8hMN5J40Sil8Y03XFyVjiHUzam08k5ikFv04qQQimm6Gv-W3uCJrbAcGKcJxOQgbDlSuxq64EoT_J-2Cs2uDzRguJ6Ep9DuG9v6cGLsY0SF_Je_W5Fuhx8FF3nw-J54CyV9T-0u8kQsnJKMje_cNwOJfGUyG7pWHP2GyRfw1t-KgP7XW5hGigxZv33hsUU6grPt5LB2Ktl9rX5yjatHv_BaHmMmVLRhE_4c7i"/>
+</div>
+</header>
+<!-- Progress Bar -->
+<div class="w-full h-6 bg-surface-container-high border-2 border-on-surface rounded-full mb-16 relative overflow-hidden">
+<div class="h-full bg-secondary-fixed border-r-2 border-on-surface" style="width: 66.6%"></div>
+<div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+<span class="font-label-bold text-label-bold uppercase tracking-widest opacity-30">Loading Nest...</span>
+</div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+<!-- Section 1: Dietary Restrictions -->
+<section class="bg-surface border-2 border-on-surface p-8 rounded-lg shadow-[8px_8px_0px_0px_rgba(27,28,28,1)] rotate-[0.5deg]">
+<div class="flex items-center gap-3 mb-6">
+<span class="material-symbols-outlined text-primary text-3xl">restaurant_menu</span>
+<h2 class="font-headline-lg text-headline-lg">忌口设定</h2>
+</div>
+<div class="flex flex-wrap gap-3">
+<button class="px-4 py-2 bg-surface-container-low border-2 border-on-surface rounded-full font-label-bold hover:bg-primary-fixed-dim hover:translate-y-0.5 transition-all shadow-[2px_2px_0px_0px_rgba(27,28,28,1)]" onclick="this.classList.toggle('bg-primary-fixed')">不吃海鲜</button>
+<button class="px-4 py-2 bg-surface-container-low border-2 border-on-surface rounded-full font-label-bold hover:bg-primary-fixed-dim hover:translate-y-0.5 transition-all shadow-[2px_2px_0px_0px_rgba(27,28,28,1)]" onclick="this.classList.toggle('bg-primary-fixed')">不吃牛肉</button>
+<button class="px-4 py-2 bg-primary-fixed border-2 border-on-surface rounded-full font-label-bold hover:translate-y-0.5 transition-all shadow-[2px_2px_0px_0px_rgba(27,28,28,1)]">不吃羊肉</button>
+<button class="px-4 py-2 bg-surface-container-low border-2 border-on-surface rounded-full font-label-bold hover:bg-primary-fixed-dim hover:translate-y-0.5 transition-all shadow-[2px_2px_0px_0px_rgba(27,28,28,1)]" onclick="this.classList.toggle('bg-primary-fixed')">不吃葱姜蒜</button>
+<button class="px-4 py-2 bg-surface-container-low border-2 border-on-surface rounded-full font-label-bold hover:bg-primary-fixed-dim hover:translate-y-0.5 transition-all shadow-[2px_2px_0px_0px_rgba(27,28,28,1)]" onclick="this.classList.toggle('bg-primary-fixed')">过敏体质</button>
+<button class="px-4 py-2 bg-surface-container-low border-2 border-on-surface rounded-full font-label-bold hover:bg-primary-fixed-dim hover:translate-y-0.5 transition-all shadow-[2px_2px_0px_0px_rgba(27,28,28,1)]" onclick="this.classList.toggle('bg-primary-fixed')">纯素食</button>
+</div>
+</section>
+<!-- Section 2: Lifestyle Labels -->
+<section class="bg-surface border-2 border-on-surface p-8 rounded-lg shadow-[8px_8px_0px_0px_rgba(27,28,28,1)] rotate-[-1deg]">
+<div class="flex items-center gap-3 mb-6">
+<span class="material-symbols-outlined text-secondary text-3xl">psychology</span>
+<h2 class="font-headline-lg text-headline-lg">生活标签</h2>
+</div>
+<div class="grid grid-cols-1 gap-4">
+<label class="relative flex items-center p-4 cursor-pointer border-2 border-on-surface rounded-lg bg-surface-container hover:bg-secondary-fixed transition-colors">
+<input checked="" class="hidden peer" name="lifestyle" type="radio"/>
+<span class="material-symbols-outlined mr-3 text-secondary peer-checked:hidden">radio_button_unchecked</span>
+<span class="material-symbols-outlined mr-3 text-secondary hidden peer-checked:inline">task_alt</span>
+<span class="font-body-lg">减脂增肌中</span>
+<div class="absolute inset-0 border-2 border-on-surface rounded-lg shadow-[4px_4px_0px_0px_rgba(27,28,28,1)] opacity-0 peer-checked:opacity-100 transition-opacity pointer-events-none"></div>
+</label>
+<label class="relative flex items-center p-4 cursor-pointer border-2 border-on-surface rounded-lg bg-surface-container hover:bg-secondary-fixed transition-colors">
+<input class="hidden peer" name="lifestyle" type="radio"/>
+<span class="material-symbols-outlined mr-3 text-secondary peer-checked:hidden">radio_button_unchecked</span>
+<span class="material-symbols-outlined mr-3 text-secondary hidden peer-checked:inline">task_alt</span>
+<span class="font-body-lg">佛系干饭人</span>
+</label>
+<label class="relative flex items-center p-4 cursor-pointer border-2 border-on-surface rounded-lg bg-surface-container hover:bg-secondary-fixed transition-colors">
+<input class="hidden peer" name="lifestyle" type="radio"/>
+<span class="material-symbols-outlined mr-3 text-secondary peer-checked:hidden">radio_button_unchecked</span>
+<span class="material-symbols-outlined mr-3 text-secondary hidden peer-checked:inline">task_alt</span>
+<span class="font-body-lg">精致生活家</span>
+</label>
+</div>
+</section>
+<!-- Section 3: Shelf-life Strategy -->
+<section class="bg-surface border-2 border-on-surface p-8 rounded-lg shadow-[8px_8px_0px_0px_rgba(27,28,28,1)] rotate-[0.5deg]">
+<div class="flex items-center gap-3 mb-6">
+<span class="material-symbols-outlined text-primary text-3xl">timer</span>
+<h2 class="font-headline-lg text-headline-lg">保质期激进策略</h2>
+</div>
+<div class="space-y-8 py-4">
+<input class="w-full h-2 bg-on-surface rounded-lg appearance-none cursor-pointer" max="100" min="0" type="range" value="30"/>
+<div class="flex justify-between font-label-bold text-label-bold">
+<div class="flex flex-col items-center gap-1">
+<span class="px-3 py-1 bg-error-container border-2 border-on-surface rounded-full">严格抛弃</span>
+<span class="text-on-surface-variant text-xs">(Strict)</span>
+</div>
+<div class="flex flex-col items-center gap-1">
+<span class="px-3 py-1 bg-secondary-container border-2 border-on-surface rounded-full">临界闻闻看</span>
+<span class="text-on-surface-variant text-xs">(Flexible)</span>
+</div>
+</div>
+</div>
+</section>
+<!-- Section 4: Reminder Time -->
+<section class="bg-surface border-2 border-on-surface p-8 rounded-lg shadow-[8px_8px_0px_0px_rgba(27,28,28,1)] rotate-[-0.5deg]">
+<div class="flex items-center gap-3 mb-6">
+<span class="material-symbols-outlined text-tertiary text-3xl">notifications_active</span>
+<h2 class="font-headline-lg text-headline-lg">提醒时间</h2>
+</div>
+<div class="flex flex-col items-center gap-4">
+<div class="bg-tertiary-fixed border-2 border-on-surface p-6 rounded-xl shadow-[4px_4px_0px_0px_rgba(27,28,28,1)] w-full text-center">
+<p class="font-label-bold text-label-bold mb-2 opacity-60">播报计划</p>
+<span class="font-headline-lg text-4xl block mb-2">每天傍晚 18:00</span>
+<p class="font-body-md text-on-surface-variant">松鼠管家将准时在此时提醒您消耗库存</p>
+</div>
+<button class="w-full py-3 border-2 border-on-surface rounded-lg font-label-bold flex items-center justify-center gap-2 hover:bg-surface-container-highest transition-all active:scale-95">
+<span class="material-symbols-outlined">schedule</span>
+                        修改播报时间
+                    </button>
+</div>
+</section>
+</div>
+<!-- Footer Navigation -->
+<div class="mt-20 flex flex-col md:flex-row justify-between items-center gap-6">
+<button class="order-2 md:order-1 px-10 py-4 font-headline-lg bg-surface border-2 border-on-surface rounded-full shadow-[4px_4px_0px_0px_rgba(27,28,28,1)] hover:translate-y-0.5 hover:translate-x-0.5 transition-all flex items-center gap-2">
+<span class="material-symbols-outlined">arrow_back</span>
+                上一步
+            </button>
+<div class="order-1 md:order-2 flex flex-col items-center md:items-end gap-2">
+<button class="px-12 py-4 font-headline-lg bg-primary-container text-white border-2 border-on-surface rounded-full shadow-[6px_6px_0px_0px_rgba(27,28,28,1)] hover:shadow-[2px_2px_0px_0px_rgba(27,28,28,1)] hover:translate-y-1 hover:translate-x-1 transition-all active:scale-95 flex items-center gap-3">
+                    设定完成
+                    <span class="material-symbols-outlined">rocket_launch</span>
+</button>
+<span class="font-label-bold text-label-bold opacity-50 italic">下一步：库存初始化导入</span>
+</div>
+</div>
+</main>
+<!-- Interactive Layer -->
+<div class="fixed bottom-8 left-1/2 -translate-x-1/2 bg-on-surface text-surface px-6 py-3 rounded-full border-2 border-surface font-label-bold opacity-0 transition-opacity pointer-events-none z-[100]" id="toast">
+        偏好已自动保存！
+    </div>
+<script>
+        // Simple micro-interaction for feedback
+        document.querySelectorAll('button, label').forEach(el => {
+            el.addEventListener('click', () => {
+                const toast = document.getElementById('toast');
+                toast.classList.remove('opacity-0');
+                setTimeout(() => toast.classList.add('opacity-0'), 2000);
+            });
+        });
+
+        // Toggle radio visual states manually for the radio cards
+        document.querySelectorAll('input[type="radio"]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                document.querySelectorAll('input[name="lifestyle"]').forEach(r => {
+                    const card = r.closest('label');
+                    if (r.checked) {
+                        card.classList.add('bg-secondary-fixed');
+                        card.classList.remove('bg-surface-container');
+                    } else {
+                        card.classList.remove('bg-secondary-fixed');
+                        card.classList.add('bg-surface-container');
+                    }
+                });
+            });
+        });
+    </script>
+</body></html>

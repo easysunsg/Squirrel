@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&amp;family=Plus+Jakarta+Sans:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-primary": "#ffffff",
+                        "surface-dim": "#dcd9d9",
+                        "outline": "#8e6f75",
+                        "on-secondary-fixed-variant": "#005313",
+                        "on-surface": "#1b1c1c",
+                        "surface-container-lowest": "#ffffff",
+                        "inverse-surface": "#303030",
+                        "tertiary-fixed-dim": "#dbc90a",
+                        "primary-fixed": "#ffd9df",
+                        "on-error-container": "#93000a",
+                        "outline-variant": "#e2bdc3",
+                        "on-tertiary-fixed": "#201c00",
+                        "on-error": "#ffffff",
+                        "on-tertiary": "#ffffff",
+                        "surface-container-highest": "#e5e2e1",
+                        "surface-container": "#f0eded",
+                        "background": "#fcf9f8",
+                        "surface-variant": "#e5e2e1",
+                        "secondary-fixed": "#94f990",
+                        "on-secondary-container": "#00731e",
+                        "surface": "#fcf9f8",
+                        "on-primary-fixed": "#3f0018",
+                        "on-secondary-fixed": "#002204",
+                        "on-secondary": "#ffffff",
+                        "surface-container-high": "#eae7e7",
+                        "primary-container": "#dd2269",
+                        "primary": "#b70052",
+                        "tertiary-fixed": "#f9e534",
+                        "tertiary": "#695f00",
+                        "error-container": "#ffdad6",
+                        "on-primary-fixed-variant": "#8f003f",
+                        "surface-tint": "#bb0054",
+                        "secondary-container": "#91f78e",
+                        "inverse-on-surface": "#f3f0ef",
+                        "on-tertiary-fixed-variant": "#4f4800",
+                        "on-primary-container": "#fffbff",
+                        "secondary": "#006e1c",
+                        "inverse-primary": "#ffb1c1",
+                        "tertiary-container": "#bdad00",
+                        "surface-container-low": "#f6f3f2",
+                        "secondary-fixed-dim": "#78dc77",
+                        "surface-bright": "#fcf9f8",
+                        "primary-fixed-dim": "#ffb1c1",
+                        "on-background": "#1b1c1c",
+                        "error": "#ba1a1a",
+                        "on-tertiary-container": "#474000",
+                        "on-surface-variant": "#5a4045"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "1rem",
+                        "lg": "2rem",
+                        "xl": "3rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "stroke-weight": "2px",
+                        "margin-desktop": "40px",
+                        "margin-mobile": "20px",
+                        "gutter": "16px",
+                        "unit": "8px"
+                    },
+                    "fontFamily": {
+                        "label-bold": ["Plus Jakarta Sans"],
+                        "body-md": ["Plus Jakarta Sans"],
+                        "display-lg": ["Bricolage Grotesque"],
+                        "headline-lg": ["Bricolage Grotesque"],
+                        "body-lg": ["Plus Jakarta Sans"],
+                        "headline-lg-mobile": ["Bricolage Grotesque"]
+                    },
+                    "fontSize": {
+                        "label-bold": ["14px", {"lineHeight": "1.2", "fontWeight": "700"}],
+                        "body-md": ["16px", {"lineHeight": "1.5", "fontWeight": "400"}],
+                        "display-lg": ["48px", {"lineHeight": "1.1", "letterSpacing": "-0.02em", "fontWeight": "800"}],
+                        "headline-lg": ["32px", {"lineHeight": "1.2", "fontWeight": "700"}],
+                        "body-lg": ["18px", {"lineHeight": "1.6", "fontWeight": "500"}],
+                        "headline-lg-mobile": ["28px", {"lineHeight": "1.2", "fontWeight": "700"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .doodle-border {
+            border: 2px solid #1b1c1c;
+        }
+        .hard-shadow {
+            box-shadow: 4px 4px 0px 0px rgba(27, 28, 28, 1);
+        }
+        .hard-shadow-active {
+            box-shadow: 2px 2px 0px 0px rgba(27, 28, 28, 1);
+            transform: translate(2px, 2px);
+        }
+        .input-doodle {
+            border: 2px solid #1b1c1c;
+            background: #ffffff;
+            transition: all 0.2s;
+        }
+        .input-doodle:focus {
+            outline: none;
+            box-shadow: 4px 4px 0px 0px rgba(183, 0, 82, 0.2);
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-md text-body-md overflow-x-hidden">
+<!-- Header Navigation Shell -->
+<header class="flex justify-between items-center w-full px-margin-desktop py-4 bg-background border-b-stroke-weight border-on-surface shadow-[4px_4px_0px_0px_rgba(27,28,28,1)] fixed top-0 z-50">
+<div class="text-headline-lg font-headline-lg font-black text-on-surface border-2 border-on-surface px-4 py-1 rounded-full rotate-[-1deg] bg-tertiary-fixed">
+            松鼠筑巢
+        </div>
+<div class="hidden md:flex items-center gap-8">
+<nav class="flex gap-6">
+<a class="text-on-surface-variant hover:text-primary font-label-bold text-label-bold transition-colors" href="#">首页</a>
+<a class="text-on-surface-variant hover:text-primary font-label-bold text-label-bold transition-colors" href="#">统计</a>
+<a class="text-primary font-bold font-label-bold text-label-bold underline underline-offset-4" href="#">设置</a>
+</nav>
+<div class="flex gap-3">
+<button class="material-symbols-outlined text-on-surface hover:text-primary transition-transform hover:scale-110" data-icon="notifications">notifications</button>
+<button class="material-symbols-outlined text-on-surface hover:text-primary transition-transform hover:scale-110" data-icon="account_circle">account_circle</button>
+</div>
+</div>
+</header>
+<div class="flex min-h-screen pt-[88px]">
+<!-- Side Navigation Shell -->
+<aside class="flex flex-col fixed left-0 top-0 h-full z-40 bg-surface-container-low w-64 border-r-stroke-weight border-on-surface hidden md:flex pt-[88px]">
+<div class="p-6">
+<div class="font-headline-lg text-headline-lg text-primary flex items-center gap-2">
+<span class="material-symbols-outlined text-4xl" data-icon="settings">settings</span>
+                    系统中心
+                </div>
+<p class="text-on-surface-variant font-body-md text-body-md mt-1">管理您的筑巢空间</p>
+</div>
+<nav class="flex-1 px-2 space-y-2">
+<a class="text-on-surface-variant flex items-center gap-2 p-3 m-2 hover:bg-surface-container-high rounded-lg transition-colors group" href="#">
+<span class="material-symbols-outlined group-hover:rotate-12 transition-transform" data-icon="dashboard">dashboard</span>
+<span class="font-label-bold text-label-bold">仪表盘</span>
+</a>
+<a class="text-on-surface-variant flex items-center gap-2 p-3 m-2 hover:bg-surface-container-high rounded-lg transition-colors group" href="#">
+<span class="material-symbols-outlined group-hover:rotate-12 transition-transform" data-icon="smart_toy">smart_toy</span>
+<span class="font-label-bold text-label-bold">AI 助手</span>
+</a>
+<a class="text-on-surface-variant flex items-center gap-2 p-3 m-2 hover:bg-surface-container-high rounded-lg transition-colors group" href="#">
+<span class="material-symbols-outlined group-hover:rotate-12 transition-transform" data-icon="inventory_2">inventory_2</span>
+<span class="font-label-bold text-label-bold">库存管理</span>
+</a>
+<a class="bg-secondary-container text-on-secondary-container border-2 border-on-surface rounded-lg shadow-[2px_2px_0px_0px_rgba(27,28,28,1)] m-2 flex items-center gap-2 p-3 group" href="#">
+<span class="material-symbols-outlined" data-icon="settings" style="font-variation-settings: 'FILL' 1;">settings</span>
+<span class="font-label-bold text-label-bold">设置</span>
+</a>
+</nav>
+<div class="p-4 border-t-2 border-on-surface">
+<button class="w-full py-3 bg-primary text-on-primary font-label-bold text-label-bold rounded-full border-2 border-on-surface hard-shadow hover:hard-shadow-active active:translate-y-px transition-all">
+                    查看数据库 MD
+                </button>
+</div>
+<footer class="p-4 space-y-2">
+<a class="flex items-center gap-2 p-2 text-on-surface-variant hover:text-primary font-label-bold text-label-bold" href="#">
+<span class="material-symbols-outlined" data-icon="info">info</span>
+                    关于
+                </a>
+<a class="flex items-center gap-2 p-2 text-error hover:font-bold font-label-bold text-label-bold" href="#">
+<span class="material-symbols-outlined" data-icon="logout">logout</span>
+                    退出登录
+                </a>
+</footer>
+</aside>
+<!-- Main Content Area -->
+<main class="flex-1 md:ml-64 p-margin-mobile md:p-margin-desktop bg-background min-h-screen">
+<div class="max-w-4xl mx-auto space-y-12 pb-24">
+<!-- Section Header -->
+<div class="space-y-2 relative">
+<h1 class="font-display-lg text-display-lg text-on-surface -rotate-1 origin-left">系统设置</h1>
+<div class="w-32 h-2 bg-tertiary-fixed rounded-full absolute -bottom-2 -left-2 -z-10 opacity-50"></div>
+</div>
+<!-- Bento Grid Settings -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+<!-- AI Settings Card -->
+<section class="doodle-border p-8 bg-surface-container-low rounded-lg hard-shadow space-y-6">
+<div class="flex items-center gap-3">
+<div class="p-3 bg-primary-fixed rounded-xl doodle-border">
+<span class="material-symbols-outlined text-primary text-3xl" data-icon="smart_toy" style="font-variation-settings: 'FILL' 1;">smart_toy</span>
+</div>
+<h2 class="font-headline-lg text-headline-lg">AI 进阶配置</h2>
+</div>
+<div class="space-y-4">
+<div>
+<label class="font-label-bold text-label-bold block mb-2">默认模型模型</label>
+<select class="w-full input-doodle p-3 rounded-lg font-body-md">
+<option>GPT-4o (筑巢专用版)</option>
+<option>Claude 3.5 Sonnet</option>
+<option>Gemini Pro 1.5</option>
+</select>
+</div>
+<div>
+<label class="font-label-bold text-label-bold block mb-2">创造力强度 (Temperature)</label>
+<input class="w-full h-2 bg-on-surface-variant rounded-lg appearance-none cursor-pointer accent-primary" max="100" min="0" type="range" value="70"/>
+<div class="flex justify-between text-on-surface-variant text-xs mt-1">
+<span>严谨</span>
+<span>奔放</span>
+</div>
+</div>
+<div class="flex items-center gap-3 p-3 bg-surface-container-highest rounded-lg border-dashed border-2 border-on-surface">
+<input checked="" class="rounded border-2 border-on-surface text-primary focus:ring-primary w-5 h-5" type="checkbox"/>
+<span class="font-body-md">开启自动标签联想</span>
+</div>
+</div>
+</section>
+<!-- Storage & Export Card -->
+<section class="doodle-border p-8 bg-surface-container-low rounded-lg hard-shadow space-y-6 rotate-1">
+<div class="flex items-center gap-3">
+<div class="p-3 bg-secondary-fixed rounded-xl doodle-border">
+<span class="material-symbols-outlined text-secondary text-3xl" data-icon="database" style="font-variation-settings: 'FILL' 1;">database</span>
+</div>
+<h2 class="font-headline-lg text-headline-lg">存储与导出</h2>
+</div>
+<div class="space-y-4">
+<div>
+<label class="font-label-bold text-label-bold block mb-2">Markdown 保存路径</label>
+<div class="flex gap-2">
+<input class="flex-1 input-doodle p-3 rounded-lg font-body-md" type="text" value="~/Documents/SongShuZhuChao/Library"/>
+<button class="material-symbols-outlined doodle-border p-3 rounded-lg hover:bg-surface-container-high" data-icon="folder_open">folder_open</button>
+</div>
+</div>
+<div class="p-4 bg-on-surface text-background rounded-lg space-y-3">
+<div class="flex justify-between items-center">
+<span class="font-label-bold text-label-bold">同步状态</span>
+<span class="text-xs px-2 py-1 bg-secondary-container text-on-secondary-container rounded-full">已就绪</span>
+</div>
+<p class="text-xs text-surface-dim">最后同步：12 分钟前</p>
+<button class="w-full py-2 bg-tertiary-fixed text-on-tertiary-fixed font-bold rounded-lg border-2 border-on-primary-container flex items-center justify-center gap-2 hover:scale-[1.02] transition-transform">
+<span class="material-symbols-outlined text-sm" data-icon="sync">sync</span>
+                                    立即同步
+                                </button>
+</div>
+</div>
+</section>
+<!-- Custom Thresholds Card -->
+<section class="md:col-span-2 doodle-border p-8 bg-surface-container-low rounded-lg hard-shadow space-y-6">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-3">
+<div class="p-3 bg-tertiary-fixed rounded-xl doodle-border">
+<span class="material-symbols-outlined text-tertiary text-3xl" data-icon="palette" style="font-variation-settings: 'FILL' 1;">palette</span>
+</div>
+<h2 class="font-headline-lg text-headline-lg">三色卡片阈值自定义</h2>
+</div>
+<span class="text-on-surface-variant font-label-bold text-label-bold hidden md:block">根据库存余量自动着色</span>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+<!-- Red Threshold -->
+<div class="p-6 bg-error-container/20 rounded-xl border-2 border-error border-dashed space-y-4">
+<div class="flex items-center gap-2 text-error">
+<span class="material-symbols-outlined" data-icon="warning">warning</span>
+<span class="font-bold">库存告急 (红色)</span>
+</div>
+<div class="flex items-end gap-2">
+<input class="w-20 input-doodle p-2 rounded-lg font-bold text-xl text-center" type="number" value="5"/>
+<span class="font-body-md mb-2">单位以下</span>
+</div>
+<p class="text-xs text-on-surface-variant">当物品余量低于此数值时，系统将发出强提醒。</p>
+</div>
+<!-- Yellow Threshold -->
+<div class="p-6 bg-tertiary-fixed/10 rounded-xl border-2 border-tertiary border-dashed space-y-4">
+<div class="flex items-center gap-2 text-tertiary">
+<span class="material-symbols-outlined" data-icon="info">info</span>
+<span class="font-bold">库存偏低 (黄色)</span>
+</div>
+<div class="flex items-end gap-2">
+<input class="w-20 input-doodle p-2 rounded-lg font-bold text-xl text-center" type="number" value="15"/>
+<span class="font-body-md mb-2">单位以下</span>
+</div>
+<p class="text-xs text-on-surface-variant">中等优先级，提示您该考虑补货了。</p>
+</div>
+<!-- Green Threshold -->
+<div class="p-6 bg-secondary-container/20 rounded-xl border-2 border-secondary border-dashed space-y-4">
+<div class="flex items-center gap-2 text-secondary">
+<span class="material-symbols-outlined" data-icon="check_circle">check_circle</span>
+<span class="font-bold">库存充沛 (绿色)</span>
+</div>
+<div class="flex items-end gap-2">
+<input class="w-20 input-doodle p-2 rounded-lg font-bold text-xl text-center" disabled="" readonly="" type="number" value="15"/>
+<span class="font-body-md mb-2">单位以上</span>
+</div>
+<p class="text-xs text-on-surface-variant">库存充足，状态健康，您可以安心使用。</p>
+</div>
+</div>
+</section>
+<!-- Advanced Decoration Section -->
+<div class="md:col-span-2 flex flex-col md:flex-row gap-8 items-center justify-between p-8 bg-primary-fixed/30 rounded-lg border-2 border-on-surface border-dotted">
+<div class="flex-1 space-y-3">
+<h3 class="font-headline-lg text-headline-lg text-on-primary-fixed">需要重置吗？</h3>
+<p class="font-body-md text-on-surface-variant">重置操作会将所有自定义阈值和 AI 配置恢复到出厂默认状态。该操作不可撤销。</p>
+<button class="px-6 py-2 bg-on-surface text-background font-bold rounded-lg border-2 border-on-surface hard-shadow hover:hard-shadow-active transition-all">
+                                恢复默认设置
+                            </button>
+</div>
+<div class="w-full md:w-64 h-48 rounded-2xl overflow-hidden doodle-border relative group bg-white">
+<img alt="Decorative Workspace" class="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-500" data-alt="A whimsical, organized desk space for a designer, featuring vibrant stationery, a sketching tablet, and colorful doodle art on the walls. The scene is bright and filled with personality, with bold black outlines around objects and a saturated color palette of pink, yellow, and green. The atmosphere is industrious yet playful, capturing the core essence of the squirrel organization brand." src="https://lh3.googleusercontent.com/aida-public/AB6AXuA7jFDfaSgLWA7gBFGF1q9TZtR4sY2tT7oUJfFj55pTadw65StR5zSdxTLvuoOgeN-bznb_Ps5GAPTe-N5-DhSuN4dRlXnqVFUiTEigIziMUbJ_7XhxI9tjC83dO7t9hRceA2wVaiRMclOCsyYRr5kzIcadKTCIKeZVx_z-FZsrjb9iMDJSIjJyCL7SV8YQ7dqULM-KKWrcYlEzL1dcsqBAj4m_SfE9uiD-NVBDiIA_sGw0qQvuopV__oPgs1Kdis_oUGaUqxumQ1M-"/>
+<div class="absolute inset-0 bg-primary/20 mix-blend-overlay"></div>
+<div class="absolute bottom-2 right-2 bg-tertiary-fixed border-2 border-on-surface px-2 py-1 text-xs font-bold -rotate-3">
+                                组织即艺术
+                            </div>
+</div>
+</div>
+</div>
+<!-- Action Footer -->
+<div class="flex flex-col md:flex-row gap-4 justify-end pt-8 border-t-4 border-on-surface border-double">
+<button class="px-12 py-4 bg-surface text-on-surface font-headline-lg rounded-full border-2 border-on-surface hover:bg-surface-container-high transition-colors">
+                        取消
+                    </button>
+<button class="px-12 py-4 bg-primary text-on-primary font-headline-lg rounded-full border-2 border-on-surface hard-shadow hover:hard-shadow-active transition-all">
+                        保存所有更改
+                    </button>
+</div>
+</div>
+</main>
+</div>
+<!-- Footer Shell -->
+<footer class="w-full py-unit-4 px-margin-desktop flex flex-col md:flex-row justify-between items-center border-t-2 border-on-surface bg-surface-container-lowest z-50 relative">
+<div class="font-label-bold text-label-bold text-on-surface-variant mb-4 md:mb-0">
+            © 2024 松鼠筑巢 - 玩转整理
+        </div>
+<div class="flex gap-6 items-center">
+<a class="text-on-surface-variant hover:text-primary font-label-bold text-label-bold transition-opacity" href="#">隐私政策</a>
+<a class="text-on-surface-variant hover:text-primary font-label-bold text-label-bold transition-opacity" href="#">使用条款</a>
+<a class="text-on-surface-variant hover:text-primary font-label-bold text-label-bold transition-opacity" href="#">联系我们</a>
+<div class="flex gap-4 ml-4">
+<span class="material-symbols-outlined text-on-surface hover:text-primary cursor-pointer" data-icon="thumb_up">thumb_up</span>
+<span class="material-symbols-outlined text-on-surface hover:text-primary cursor-pointer" data-icon="share">share</span>
+</div>
+</div>
+<div class="mt-4 md:mt-0 flex items-center gap-2">
+<span class="material-symbols-outlined text-3xl text-primary" data-icon="pan_tool_alt" style="font-variation-settings: 'FILL' 1;">pan_tool_alt</span>
+<span class="font-bold text-primary italic">Keep it tidy!</span>
+</div>
+</footer>
+<!-- Mobile Bottom Navigation Shell -->
+<div class="md:hidden fixed bottom-0 left-0 right-0 bg-background border-t-stroke-weight border-on-surface px-6 py-2 flex justify-around items-center z-50">
+<button class="flex flex-col items-center gap-1 text-on-surface-variant">
+<span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+<span class="text-[10px] font-bold">看板</span>
+</button>
+<button class="flex flex-col items-center gap-1 text-on-surface-variant">
+<span class="material-symbols-outlined" data-icon="smart_toy">smart_toy</span>
+<span class="text-[10px] font-bold">助手</span>
+</button>
+<button class="flex flex-col items-center gap-1 text-primary">
+<span class="material-symbols-outlined" data-icon="settings" style="font-variation-settings: 'FILL' 1;">settings</span>
+<span class="text-[10px] font-bold">设置</span>
+</button>
+</div>
+<script>
+        // Micro-interactions
+        document.querySelectorAll('button, input[type="range"], select').forEach(el => {
+            el.addEventListener('mousedown', () => {
+                if (el.classList.contains('hard-shadow')) {
+                    el.classList.add('hard-shadow-active');
+                    el.classList.remove('hard-shadow');
+                }
+            });
+            el.addEventListener('mouseup', () => {
+                if (el.classList.contains('hard-shadow-active')) {
+                    el.classList.remove('hard-shadow-active');
+                    el.classList.add('hard-shadow');
+                }
+            });
+            el.addEventListener('mouseleave', () => {
+                if (el.classList.contains('hard-shadow-active')) {
+                    el.classList.remove('hard-shadow-active');
+                    el.classList.add('hard-shadow');
+                }
+            });
+        });
+
+        // Toggle sync button rotation
+        const syncBtn = document.querySelector('button .material-symbols-outlined[data-icon="sync"]');
+        if (syncBtn) {
+            syncBtn.parentElement.addEventListener('click', function() {
+                this.querySelector('.material-symbols-outlined').classList.add('animate-spin');
+                setTimeout(() => {
+                    this.querySelector('.material-symbols-outlined').classList.remove('animate-spin');
+                }, 1000);
+            });
+        }
+    </script>
+</body></html>

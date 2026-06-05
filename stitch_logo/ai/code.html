@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AI 助手 - 松鼠筑巢</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&amp;family=Plus+Jakarta+Sans:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-primary": "#ffffff",
+                        "surface-dim": "#dcd9d9",
+                        "outline": "#8e6f75",
+                        "on-secondary-fixed-variant": "#005313",
+                        "on-surface": "#1b1c1c",
+                        "surface-container-lowest": "#ffffff",
+                        "inverse-surface": "#303030",
+                        "tertiary-fixed-dim": "#dbc90a",
+                        "primary-fixed": "#ffd9df",
+                        "on-error-container": "#93000a",
+                        "outline-variant": "#e2bdc3",
+                        "on-tertiary-fixed": "#201c00",
+                        "on-error": "#ffffff",
+                        "on-tertiary": "#ffffff",
+                        "surface-container-highest": "#e5e2e1",
+                        "surface-container": "#f0eded",
+                        "background": "#fcf9f8",
+                        "surface-variant": "#e5e2e1",
+                        "secondary-fixed": "#94f990",
+                        "on-secondary-container": "#00731e",
+                        "surface": "#fcf9f8",
+                        "on-primary-fixed": "#3f0018",
+                        "on-secondary-fixed": "#002204",
+                        "on-secondary": "#ffffff",
+                        "surface-container-high": "#eae7e7",
+                        "primary-container": "#dd2269",
+                        "primary": "#b70052",
+                        "tertiary-fixed": "#f9e534",
+                        "tertiary": "#695f00",
+                        "error-container": "#ffdad6",
+                        "on-primary-fixed-variant": "#8f003f",
+                        "surface-tint": "#bb0054",
+                        "secondary-container": "#91f78e",
+                        "inverse-on-surface": "#f3f0ef",
+                        "on-tertiary-fixed-variant": "#4f4800",
+                        "on-primary-container": "#fffbff",
+                        "secondary": "#006e1c",
+                        "inverse-primary": "#ffb1c1",
+                        "tertiary-container": "#bdad00",
+                        "surface-container-low": "#f6f3f2",
+                        "secondary-fixed-dim": "#78dc77",
+                        "surface-bright": "#fcf9f8",
+                        "primary-fixed-dim": "#ffb1c1",
+                        "on-background": "#1b1c1c",
+                        "error": "#ba1a1a",
+                        "on-tertiary-container": "#474000",
+                        "on-surface-variant": "#5a4045"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "1rem",
+                        "lg": "2rem",
+                        "xl": "3rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "stroke-weight": "2px",
+                        "margin-desktop": "40px",
+                        "margin-mobile": "20px",
+                        "gutter": "16px",
+                        "unit": "8px"
+                    },
+                    "fontFamily": {
+                        "label-bold": ["Plus Jakarta Sans"],
+                        "body-md": ["Plus Jakarta Sans"],
+                        "display-lg": ["Bricolage Grotesque"],
+                        "headline-lg": ["Bricolage Grotesque"],
+                        "body-lg": ["Plus Jakarta Sans"],
+                        "headline-lg-mobile": ["Bricolage Grotesque"]
+                    },
+                    "fontSize": {
+                        "label-bold": ["14px", {"lineHeight": "1.2", "fontWeight": "700"}],
+                        "body-md": ["16px", {"lineHeight": "1.5", "fontWeight": "400"}],
+                        "display-lg": ["48px", {"lineHeight": "1.1", "letterSpacing": "-0.02em", "fontWeight": "800"}],
+                        "headline-lg": ["32px", {"lineHeight": "1.2", "fontWeight": "700"}],
+                        "body-lg": ["18px", {"lineHeight": "1.6", "fontWeight": "500"}],
+                        "headline-lg-mobile": ["28px", {"lineHeight": "1.2", "fontWeight": "700"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 700, 'GRAD' 0, 'opsz' 48;
+            font-size: 24px;
+        }
+        .doodle-border {
+            border: 2px solid #1b1c1c;
+        }
+        .hard-shadow {
+            box-shadow: 4px 4px 0px 0px #1b1c1c;
+        }
+        .hard-shadow-sm {
+            box-shadow: 2px 2px 0px 0px #1b1c1c;
+        }
+        .active-press:active {
+            transform: translate(2px, 2px);
+            box-shadow: 0px 0px 0px 0px #1b1c1c;
+        }
+        .wave-bar {
+            width: 3px;
+            background: currentColor;
+            border-radius: 10px;
+            animation: wave 1s ease-in-out infinite;
+        }
+        @keyframes wave {
+            0%, 100% { height: 8px; }
+            50% { height: 24px; }
+        }
+        .rotate-sketch {
+            transform: rotate(-1deg);
+        }
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-md overflow-hidden h-screen flex">
+<!-- SideNavBar (Shared Component) -->
+<nav class="flex flex-col fixed left-0 top-0 h-full z-40 bg-surface-container-low h-screen w-64 border-r-stroke-weight border-on-surface hidden md:flex">
+<div class="p-6 flex flex-col gap-2">
+<div class="font-headline-lg text-headline-lg text-primary mb-8 rotate-sketch">松鼠筑巢</div>
+<div class="flex items-center gap-4 mb-10">
+<div class="w-12 h-12 rounded-full doodle-border hard-shadow-sm overflow-hidden bg-tertiary-fixed">
+<img alt="Avatar" class="w-full h-full" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAE0SSHT0fVBkFvFebJZ4JkN5D7LUb-PYrbIP4LTZKRIlvrZ9lsg3vmq7hH6o8qIhn1DL0QqLSyDoFn1bpZbt13nwfKORUEx2HRNXylvsAKE9GnX-P1N1WDTVPOaPUgSDIWvSZRhs_DQ_564LxHG8VXBK1-eLsNFjtXCipmv__rWQ1yTqzSbFKkM1gM20UfrM-6chQtkYpzxWq6c6-_-lo1NzoInfAUmRSDkYD6AShw2zxelUkxmBoD3HZytggG3qGpQ3UEAcaRMvnj"/>
+</div>
+<div>
+<p class="font-label-bold text-label-bold">松鼠筑巢</p>
+<p class="text-xs text-on-surface-variant">智能家居管家</p>
+</div>
+</div>
+<a class="text-on-surface-variant flex items-center gap-2 p-3 m-2 hover:bg-surface-container-high rounded-lg transition-colors" href="#">
+<span class="material-symbols-outlined">dashboard</span>
+<span class="font-label-bold text-label-bold">仪表盘</span>
+</a>
+<a class="bg-secondary-container text-on-secondary-container border-2 border-on-surface rounded-lg shadow-[2px_2px_0px_0px_rgba(27,28,28,1)] m-2 flex items-center gap-2 p-3 active-press transition-transform" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">smart_toy</span>
+<span class="font-label-bold text-label-bold">AI 助手</span>
+</a>
+<a class="text-on-surface-variant flex items-center gap-2 p-3 m-2 hover:bg-surface-container-high rounded-lg transition-colors" href="#">
+<span class="material-symbols-outlined">inventory_2</span>
+<span class="font-label-bold text-label-bold">库存管理</span>
+</a>
+<a class="text-on-surface-variant flex items-center gap-2 p-3 m-2 hover:bg-surface-container-high rounded-lg transition-colors" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span class="font-label-bold text-label-bold">设置</span>
+</a>
+</div>
+<div class="mt-auto p-4 border-t-2 border-on-surface">
+<button class="w-full py-3 doodle-border hard-shadow-sm bg-primary-fixed text-on-primary-fixed font-label-bold active-press mb-4">查看数据库 MD</button>
+<div class="flex flex-col gap-2">
+<a class="text-on-surface-variant flex items-center gap-2 p-2 px-4 hover:text-primary transition-colors" href="#">
+<span class="material-symbols-outlined">info</span>
+<span class="text-sm">关于</span>
+</a>
+<a class="text-on-surface-variant flex items-center gap-2 p-2 px-4 hover:text-error transition-colors" href="#">
+<span class="material-symbols-outlined">logout</span>
+<span class="text-sm">退出</span>
+</a>
+</div>
+</div>
+</nav>
+<!-- Main Content Canvas -->
+<main class="flex-1 ml-0 md:ml-64 flex flex-col h-screen relative bg-background">
+<!-- TopAppBar (Mobile & Contextual Header) -->
+<header class="flex justify-between items-center w-full px-6 py-4 bg-background border-b-stroke-weight border-on-surface md:border-none">
+<div class="flex items-center gap-3">
+<button class="md:hidden">
+<span class="material-symbols-outlined">menu</span>
+</button>
+<h1 class="font-headline-lg-mobile text-headline-lg-mobile md:font-headline-lg md:text-headline-lg font-black rotate-[-1deg] bg-tertiary-fixed px-3 doodle-border rounded-full">AI 助手</h1>
+</div>
+<div class="flex gap-4">
+<span class="material-symbols-outlined text-primary hover:scale-110 transition-transform cursor-pointer">notifications</span>
+<span class="material-symbols-outlined text-primary hover:scale-110 transition-transform cursor-pointer">account_circle</span>
+</div>
+</header>
+<!-- Chat Container -->
+<div class="flex-1 flex overflow-hidden">
+<!-- History Sidebar (Left) -->
+<aside class="hidden lg:flex w-72 flex-col border-r-stroke-weight border-on-surface bg-surface-container-lowest p-4 gap-4">
+<p class="font-label-bold text-label-bold text-on-surface-variant px-2">最近对话</p>
+<div class="flex-1 overflow-y-auto space-y-3 scrollbar-hide">
+<div class="p-4 doodle-border hard-shadow-sm bg-secondary-fixed-dim rounded-xl active-press cursor-pointer">
+<p class="font-label-bold text-sm truncate">帮我整理储藏间...</p>
+<p class="text-xs opacity-70">2分钟前</p>
+</div>
+<div class="p-4 doodle-border bg-white rounded-xl hover:bg-surface-container-high transition-colors cursor-pointer">
+<p class="font-label-bold text-sm truncate">寻找丢失的螺丝刀</p>
+<p class="text-xs opacity-70">昨天</p>
+</div>
+<div class="p-4 doodle-border bg-white rounded-xl hover:bg-surface-container-high transition-colors cursor-pointer">
+<p class="font-label-bold text-sm truncate">列出所有过期的调料</p>
+<p class="text-xs opacity-70">3天前</p>
+</div>
+</div>
+<button class="w-full py-3 doodle-border hard-shadow-sm bg-white font-label-bold flex items-center justify-center gap-2 active-press">
+<span class="material-symbols-outlined">add_comment</span>
+                    新对话
+                </button>
+</aside>
+<!-- Chat Main Area -->
+<section class="flex-1 flex flex-col bg-surface-container-lowest relative">
+<!-- Messages Scrollable -->
+<div class="flex-1 overflow-y-auto p-6 space-y-8 scrollbar-hide pb-32">
+<!-- AI Bubble: Welcome -->
+<div class="flex items-start gap-4 max-w-3xl">
+<div class="w-10 h-10 rounded-full doodle-border bg-tertiary flex items-center justify-center text-white shrink-0 hard-shadow-sm">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">smart_toy</span>
+</div>
+<div class="bg-white doodle-border hard-shadow p-6 rounded-2xl relative">
+<div class="absolute -left-2 top-4 w-4 h-4 bg-white border-l-2 border-b-2 border-on-surface rotate-45"></div>
+<p class="font-body-lg text-body-lg">嘿！我是你的松鼠管家。今天想整理点什么？你可以发照片给我，或者直接语音告诉我！🐿️</p>
+</div>
+</div>
+<!-- User Bubble: Voice -->
+<div class="flex items-start gap-4 max-w-3xl ml-auto flex-row-reverse">
+<div class="w-10 h-10 rounded-full doodle-border bg-primary flex items-center justify-center text-white shrink-0 hard-shadow-sm">
+<span class="material-symbols-outlined text-sm">person</span>
+</div>
+<div class="bg-primary-fixed doodle-border hard-shadow p-4 rounded-2xl relative flex items-center gap-4">
+<div class="absolute -right-2 top-4 w-4 h-4 bg-primary-fixed border-r-2 border-t-2 border-on-surface rotate-45"></div>
+<span class="material-symbols-outlined">play_circle</span>
+<div class="flex items-end gap-1 h-6">
+<div class="wave-bar" style="animation-delay: 0.1s; height: 12px;"></div>
+<div class="wave-bar" style="animation-delay: 0.3s; height: 18px;"></div>
+<div class="wave-bar" style="animation-delay: 0.2s; height: 10px;"></div>
+<div class="wave-bar" style="animation-delay: 0.5s; height: 22px;"></div>
+<div class="wave-bar" style="animation-delay: 0.4s; height: 14px;"></div>
+</div>
+<span class="font-label-bold text-label-bold px-2">0:12</span>
+</div>
+</div>
+<!-- AI Bubble: Image Recognition + Action Card -->
+<div class="flex items-start gap-4 max-w-3xl">
+<div class="w-10 h-10 rounded-full doodle-border bg-tertiary flex items-center justify-center text-white shrink-0 hard-shadow-sm">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">smart_toy</span>
+</div>
+<div class="bg-white doodle-border hard-shadow p-0 overflow-hidden rounded-2xl relative w-full sm:w-auto">
+<div class="p-6">
+<p class="font-body-lg text-body-lg mb-4">收到！我已经识别出你照片里的工具。你想把它们存入 **"车库-工具箱B"** 吗？</p>
+<!-- Structured Confirmation Card -->
+<div class="bg-surface-container-low doodle-border p-4 rounded-xl flex flex-col gap-3">
+<div class="flex items-center gap-3">
+<div class="w-16 h-16 bg-white doodle-border rounded-lg overflow-hidden shrink-0">
+<img class="w-full h-full object-cover" data-alt="A close-up photograph of a professional set of screwdrivers and wrenches laid out on a wooden workbench. The lighting is warm and industrial, creating sharp, graphic shadows. The style is clean and organized, matching a high-end DIY home management app's aesthetic. Vibrant tool handles in red and yellow provide pops of color against the neutral wood background." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAi0e0pMmh7n9_aGTW81tBycuiOEyAZPQx9amTGNI61Tv6lVT4Cy-EJ7aNh_Jk4aJV3gAJ9c2L6_pM2Rzalf78pA3hiaojD3WUXPGNsCVyMz0RmYHmDvBTj5IYh-9d9FDeB59eiXWLIcQEsNdWQuQqYNdEwJaHhPkIjRymaNmxfiAi0EE30ZVL_HWQS5-YbunGoYMbW_0qHo_2e-l32j1TUiNFhLAEBJmGWkk3iaJlEG3fPm8vwTzK9AOaV_BXT2YvPC4IbCfyP1g5i"/>
+</div>
+<div>
+<p class="font-label-bold text-label-bold">五金工具套装</p>
+<div class="flex gap-2 mt-1">
+<span class="px-2 py-0.5 bg-tertiary-fixed text-[10px] doodle-border rounded-full font-bold">待分类</span>
+<span class="px-2 py-0.5 bg-secondary-fixed text-[10px] doodle-border rounded-full font-bold">数量: 8</span>
+</div>
+</div>
+</div>
+<div class="flex gap-2 pt-2">
+<button class="flex-1 py-2 bg-secondary text-white font-label-bold doodle-border rounded-lg active-press text-sm">确认入库</button>
+<button class="flex-1 py-2 bg-white text-on-surface font-label-bold doodle-border rounded-lg active-press text-sm">修改信息</button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Input Zone -->
+<div class="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-surface-container-lowest via-surface-container-lowest/90 to-transparent">
+<div class="max-w-4xl mx-auto flex items-end gap-4">
+<!-- Huge Mic Button -->
+<button class="w-20 h-20 bg-primary-container text-on-primary-container rounded-full doodle-border hard-shadow flex items-center justify-center shrink-0 active-press hover:scale-105 transition-all group">
+<span class="material-symbols-outlined !text-4xl group-hover:rotate-12 transition-transform">mic</span>
+</button>
+<!-- Text/Action Field -->
+<div class="flex-1 relative">
+<div class="doodle-border hard-shadow bg-white rounded-2xl p-2 flex items-center gap-2">
+<button class="p-2 text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined">add_circle</span>
+</button>
+<input class="flex-1 border-none focus:ring-0 bg-transparent font-body-md py-3" placeholder="输入整理指令或询问库存..." type="text"/>
+<button class="p-3 bg-tertiary-fixed text-on-tertiary-fixed doodle-border rounded-xl active-press">
+<span class="material-symbols-outlined">send</span>
+</button>
+</div>
+<!-- Floating Suggestions (Quick Actions) -->
+<div class="flex gap-3 mt-4 overflow-x-auto scrollbar-hide pb-2">
+<button class="whitespace-nowrap px-4 py-1.5 doodle-border bg-white text-xs font-label-bold rounded-full hover:bg-surface-container-high active-press">
+                                    🔍 帮我找...
+                                </button>
+<button class="whitespace-nowrap px-4 py-1.5 doodle-border bg-white text-xs font-label-bold rounded-full hover:bg-surface-container-high active-press">
+                                    📦 开始扫码入库
+                                </button>
+<button class="whitespace-nowrap px-4 py-1.5 doodle-border bg-white text-xs font-label-bold rounded-full hover:bg-surface-container-high active-press">
+                                    🧹 生成整理清单
+                                </button>
+</div>
+</div>
+</div>
+</div>
+</section>
+</div>
+<!-- Floating Decoration: The Squirrel -->
+<div class="absolute right-10 top-32 pointer-events-none hidden xl:block animate-bounce" style="animation-duration: 3s;">
+<div class="relative group">
+<div class="absolute -top-12 -left-12 bg-white doodle-border hard-shadow-sm px-4 py-2 rounded-xl text-xs font-bold rotate-[-12deg] opacity-0 group-hover:opacity-100 transition-opacity">
+                    需要帮忙吗？
+                </div>
+<img alt="Squirrel Mascot" class="w-32 h-32 grayscale hover:grayscale-0 transition-all cursor-pointer pointer-events-auto" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDMAAidjrmASOkbCLEtGD5zGevPayzGKg2VP3CbkzCKCZHsxBGlDCpIlmAhc-D4A02_riCI9fqyEy-ACO9vXjni6FlsWpkLvupK056lUz8I8QfBFK9VFaOVzdDyUoJh4_ki0W7CUDyV-h4PIzKJSQSzfsKlNb1XZ9OkpMZxqQIPm3xqAdx_hIyRWaavvbh0-7mIn7yIl3Rj2xlzQ8iz2lSDwJ9PBSdC0l0Vo3YIPFNb1d_Dr22BpqBDfZ6GpzRt8T3Oy8ABffrucJFL"/>
+</div>
+</div>
+</main>
+<!-- BottomNavBar (Mobile Shared Component) -->
+<nav class="fixed bottom-0 left-0 right-0 md:hidden bg-background border-t-2 border-on-surface flex justify-around py-4 z-50">
+<a class="flex flex-col items-center gap-1 text-on-surface-variant" href="#">
+<span class="material-symbols-outlined">dashboard</span>
+<span class="text-[10px] font-bold">仪表盘</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-primary" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">smart_toy</span>
+<span class="text-[10px] font-bold">AI 助手</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-on-surface-variant" href="#">
+<span class="material-symbols-outlined">inventory_2</span>
+<span class="text-[10px] font-bold">库存</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-on-surface-variant" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span class="text-[10px] font-bold">设置</span>
+</a>
+</nav>
+<script>
+        // Simple micro-interaction for the voice bars
+        const bars = document.querySelectorAll('.wave-bar');
+        setInterval(() => {
+            bars.forEach(bar => {
+                const height = Math.floor(Math.random() * 20) + 8;
+                bar.style.height = height + 'px';
+            });
+        }, 150);
+
+        // Input focus animation
+        const input = document.querySelector('input');
+        input.addEventListener('focus', () => {
+            input.parentElement.classList.add('translate-y-[-2px]');
+            input.parentElement.style.boxShadow = '6px 6px 0px 0px #1b1c1c';
+        });
+        input.addEventListener('blur', () => {
+            input.parentElement.classList.remove('translate-y-[-2px]');
+            input.parentElement.style.boxShadow = '4px 4px 0px 0px #1b1c1c';
+        });
+    </script>
+</body></html>
