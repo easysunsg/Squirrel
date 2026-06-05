@@ -162,7 +162,7 @@ export default function InventoryView({
             <div
               key={item.id}
               onClick={() => setActiveDetailItem(item)}
-              className={`bg-[#fdfbf7] border-2 border-on-surface rounded-2xl p-5 shadow-[4px_4px_0px_0px_rgba(27,28,28,1)] hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer flex flex-col justify-between h-48 group relative overflow-hidden`}
+              className={`bg-surface-container-lowest border-2 border-on-surface rounded-2xl p-5 shadow-[4px_4px_0px_0px_rgba(27,28,28,1)] hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer flex flex-col justify-between h-48 group relative overflow-hidden`}
               id={`item-card-${item.id}`}
             >
               {/* Hand-drawn look pattern stripes */}
@@ -254,7 +254,7 @@ export default function InventoryView({
           {/* Backdrop Clicker */}
           <div className="absolute inset-0 cursor-pointer" onClick={() => setActiveDetailItem(null)} />
           
-          <div className="bg-[#fcfaf4] w-full max-w-md h-full border-l-4 border-on-surface relative p-6 flex flex-col justify-between shadow-[-10px_0px_0px_0px_rgba(27,28,28,0.15)] z-10 animate-in slide-in-from-right duration-250">
+          <div className="bg-background w-full max-w-md h-full border-l-4 border-on-surface relative p-6 flex flex-col justify-between shadow-[-10px_0px_0px_0px_rgba(27,28,28,0.15)] z-10 animate-in slide-in-from-right duration-250">
             <div>
               <div className="flex justify-between items-center border-b-2 border-on-surface pb-4 mb-6">
                 <div className="flex items-center gap-3">

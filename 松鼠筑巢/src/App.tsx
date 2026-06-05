@@ -256,7 +256,7 @@ export default function App() {
   const recentExpiryTitle = items.find(i => i.tag === '告急' || i.tag === '过期预警')?.title || '面包等';
 
   return (
-    <div className="min-h-screen bg-[#fcfaf4] text-on-surface font-sans flex flex-col relative pb-8">
+    <div className="min-h-screen bg-background text-on-surface font-sans flex flex-col relative pb-8">
       
       {/* Dynamic Slide Banner Notification */}
       {notification && (
@@ -267,7 +267,7 @@ export default function App() {
       )}
 
       {/* Persistent global alert ticker at very top */}
-      <div className="w-full bg-[#fa1d7c]/10 text-[#fa1d7c] border-b-2 border-on-surface py-2.5 px-4 text-center text-xs font-extrabold flex items-center justify-center gap-2 select-none">
+      <div className="w-full bg-error text-white border-b-2 border-on-surface py-2.5 px-4 text-center text-xs font-extrabold flex items-center justify-center gap-2 select-none shadow-[0px_3px_0px_0px_#1b1c1c]">
         <Bell className="w-4 h-4 animate-shake fill-current" />
         <span>
           {urgentCount > 0 
@@ -281,7 +281,7 @@ export default function App() {
         
         {/* Playful Brand Logo */}
         <div className="flex items-center gap-2">
-          <div className="bg-[#b70052] text-white p-2.5 rounded-2xl border-2 border-on-surface shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] rotate-[-1deg]">
+          <div className="bg-primary text-white p-2.5 rounded-2xl border-2 border-on-surface shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] rotate-[-1deg]">
             <span className="text-3xl">🏡</span>
           </div>
           <div>
@@ -308,7 +308,7 @@ export default function App() {
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex items-center gap-1.5 px-4 py-2 text-xs font-black rounded-full border-2 transition-all cursor-pointer ${
                   isSelected 
-                    ? 'bg-[#b70052] text-white border-on-surface shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] scale-[1.01] -rotate-1' 
+                    ? 'bg-primary text-white border-on-surface shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] scale-[1.01] -rotate-1' 
                     : 'bg-transparent border-transparent hover:border-on-surface hover:bg-surface-container-low'
                 }`}
                 id={`tab-${tab.id}`}

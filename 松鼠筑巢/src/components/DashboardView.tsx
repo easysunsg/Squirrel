@@ -148,7 +148,7 @@ export default function DashboardView({
       <div className="md:col-span-7 space-y-8">
         
         {/* AI Input Block (Lightning Capsule) */}
-        <section className="bg-white border-2 border-on-surface p-6 rounded-xl shadow-[4px_4px_0px_0px_rgba(27,28,28,1)] rotate-[-0.5deg]">
+        <section className="bg-white border-2 border-primary p-6 rounded-xl shadow-[6px_6px_0px_0px_rgba(183,0,82,1)] rotate-[-0.5deg]">
           <div className="flex items-center gap-3 mb-4">
             <span className="bg-primary text-white p-2 rounded-full flex items-center justify-center border-2 border-on-surface">
               <Bolt className="w-5 h-5 fill-current" />
@@ -188,28 +188,28 @@ export default function DashboardView({
 
         {/* Status Dashboard Blocks (Three cards aligned slightly wonky) */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="border-2 border-error p-4 rounded-xl shadow-[2px_2px_0px_0px_#1b1c1c] bg-error-container rotate-1">
-            <div className="text-error font-headline-lg text-4xl font-black mb-1">
+          <div className="border-2 border-on-surface p-4 rounded-xl shadow-[4px_4px_0px_0px_#1b1c1c] bg-error text-white rotate-1">
+            <div className="text-white font-headline-lg text-4xl font-black mb-1">
               {String(urgentCount).padStart(2, '0')}
             </div>
-            <div className="text-on-error-container text-xs font-bold uppercase tracking-wider">库存告罄</div>
-            <p className="text-on-error-container text-xs mt-2 line-clamp-2">快去补货：{urgentListStr}</p>
+            <div className="text-white text-xs font-bold uppercase tracking-wider">库存告罄</div>
+            <p className="text-white/90 text-xs mt-2 line-clamp-2">快去补货：{urgentListStr}</p>
           </div>
 
-          <div className="border-2 border-tertiary p-4 rounded-xl shadow-[2px_2px_0px_0px_#1b1c1c] bg-tertiary-fixed rotate-[-1deg]">
-            <div className="text-tertiary font-headline-lg text-4xl font-black mb-1">
+          <div className="border-2 border-on-surface p-4 rounded-xl shadow-[4px_4px_0px_0px_#1b1c1c] bg-tertiary-fixed rotate-[-1deg]">
+            <div className="text-on-tertiary-fixed font-headline-lg text-4xl font-black mb-1">
               {String(lowCount).padStart(2, '0')}
             </div>
-            <div className="text-on-tertiary-container text-xs font-bold uppercase tracking-wider">低库存预警</div>
-            <p className="text-on-tertiary-container text-xs mt-2 line-clamp-2">这些不多啦：{lowListStr}</p>
+            <div className="text-on-tertiary-fixed text-xs font-bold uppercase tracking-wider">低库存预警</div>
+            <p className="text-on-tertiary-fixed-variant text-xs mt-2 line-clamp-2">这些不多啦：{lowListStr}</p>
           </div>
 
-          <div className="border-2 border-on-surface p-4 rounded-xl shadow-[2px_2px_0px_0px_#1b1c1c] bg-surface-variant rotate-0.5">
-            <div className="text-on-surface font-headline-lg text-4xl font-black mb-1">
+          <div className="border-2 border-on-surface p-4 rounded-xl shadow-[4px_4px_0px_0px_#1b1c1c] bg-secondary-container rotate-0.5">
+            <div className="text-on-secondary-container font-headline-lg text-4xl font-black mb-1">
               {String(healthyCount).padStart(2, '0')}
             </div>
-            <div className="text-on-surface-variant text-xs font-bold uppercase tracking-wider">库存充足</div>
-            <p className="text-on-surface-variant text-xs mt-2 line-clamp-2">大部分囤货状态很健康哦！</p>
+            <div className="text-on-secondary-container text-xs font-bold uppercase tracking-wider">库存充足</div>
+            <p className="text-on-secondary-container text-xs mt-2 line-clamp-2">大部分囤货状态很健康哦！</p>
           </div>
         </div>
 

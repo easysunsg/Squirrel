@@ -173,7 +173,7 @@ export default function SettingsView({
           </h3>
 
           <div className="grid grid-cols-3 gap-4 text-xs font-bold leading-relaxed">
-            <div className="bg-[#fff5f5] p-3 rounded-xl border border-error">
+            <div className="bg-error-container p-3 rounded-xl border border-error">
               <label className="block text-error text-[10px] mb-1 font-black">🔴 库存告罄 (Warning Threshold)</label>
               <div className="flex items-center gap-1">
                 <input 
@@ -186,7 +186,7 @@ export default function SettingsView({
               </div>
             </div>
 
-            <div className="bg-[#fffdf0] p-3 rounded-xl border border-tertiary">
+            <div className="bg-tertiary-fixed p-3 rounded-xl border border-tertiary">
               <label className="block text-tertiary text-[10px] mb-1 font-black">🟡 补货提示线 (Low Threshold)</label>
               <div className="flex items-center gap-1">
                 <input 
@@ -199,7 +199,7 @@ export default function SettingsView({
               </div>
             </div>
 
-            <div className="bg-[#f0fbf0] p-3 rounded-xl border border-secondary text-on-surface">
+            <div className="bg-secondary-container p-3 rounded-xl border border-secondary text-on-surface">
               <label className="block text-secondary text-[10px] mb-1 font-black">🟢 安全高枕线 (Full Scale)</label>
               <div className="flex items-center gap-1 h-9">
                 <input 
