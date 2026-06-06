@@ -1,13 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Space, Item, Message, SystemPreferences } from './types';
 import { 
-  getStoredSpaces, saveStoredSpaces,
-  getStoredItems, saveStoredItems,
-  getStoredMessages, saveStoredMessages,
-  getStoredPreferences, saveStoredPreferences,
-  getOnboardingDone, setOnboardingDone,
   INITIAL_ITEMS, INITIAL_SPACES, INITIAL_MESSAGES, DEFAULT_PREFERENCES
 } from './data';
+import { createItem, deleteItem, fetchState, saveState, updateItem } from './api';
 
 import OnboardingView from './components/OnboardingView';
 import DashboardView from './components/DashboardView';
@@ -15,9 +11,7 @@ import AssistantView from './components/AssistantView';
 import InventoryView from './components/InventoryView';
 import SettingsView from './components/SettingsView';
 
-import { 
-  Home, MessageCircle, Archive, Settings, Bell, Sparkles, LogOut, Clock, BookOpen, Layers
-} from 'lucide-react';
+import { Home, MessageCircle, Archive, Settings, Bell } from 'lucide-react';
 
 export default function App() {
   // 1. Initial State Loaders
@@ -27,16 +21,31 @@ export default function App() {
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [preferences, setPreferences] = useState<SystemPreferences>(DEFAULT_PREFERENCES);
+  const [isServerReady, setIsServerReady] = useState(false);
 
   const [notification, setNotification] = useState<string | null>(null);
 
   // Load everything on startup
   useEffect(() => {
-    setOnboardingDoneState(getOnboardingDone());
-    setItems(getStoredItems());
-    setSpaces(getStoredSpaces());
-    setMessages(getStoredMessages());
-    setPreferences(getStoredPreferences());
+    fetchState()
+      .then((state) => {
+        setOnboardingDoneState(state.onboardingDone);
+        setItems(state.items);
+        setSpaces(state.spaces);
+        setMessages(state.messages);
+        setPreferences(state.preferences);
+        setIsServerReady(true);
+      })
+      .catch((error) => {
+        console.error(error);
+        setOnboardingDoneState(true);
+        setItems(INITIAL_ITEMS);
+        setSpaces(INITIAL_SPACES);
+        setMessages(INITIAL_MESSAGES);
+        setPreferences(DEFAULT_PREFERENCES);
+        setIsServerReady(true);
+        triggerBannerNotification('后端暂时未连接，当前显示前端示例数据。');
+      });
   }, []);
 
   // Show a temporary banner notification
@@ -50,9 +59,8 @@ export default function App() {
   // --- Core State Callbacks ---
 
   // Onboarding completion handler
-  const handleOnboardingComplete = (newPrefs: Partial<SystemPreferences>, selectedSpaces: string[]) => {
+  const handleOnboardingComplete = async (newPrefs: Partial<SystemPreferences>, selectedSpaces: string[]) => {
     // 1. Set onboard state
-    setOnboardingDone(true);
     setOnboardingDoneState(true);
 
     // 2. Build initialized spaces
@@ -76,36 +84,25 @@ export default function App() {
     // Save defaults
     const completePrefs = { ...preferences, ...newPrefs };
     setPreferences(completePrefs);
-    saveStoredPreferences(completePrefs);
 
     setSpaces(initialSpacesBuilt);
-    saveStoredSpaces(initialSpacesBuilt);
 
-    // Seed 1-2 starting foods in their main refrigerator if selected
-    if (selectedSpaces.includes('主冰箱')) {
-      const starterItems: Item[] = [
-        {
-          id: 'starter-1',
-          title: '新鲜纯牛奶',
-          spaceId: initialSpacesBuilt[0].id,
-          spaceName: '主冰箱',
-          location: '主冷藏层柜',
-          remainingPct: 80,
-          buyDate: new Date().toISOString().split('T')[0],
-          expireDate: '2026-12-15',
-          tag: '充足',
-          count: 2,
-          unit: '盒',
-          icon: 'kitchen',
-          remark: '由设置向导自动赠送，开启健康整理记录！'
-        }
-      ];
-      setItems(starterItems);
-      saveStoredItems(starterItems);
-    } else {
-      setItems([]);
-      saveStoredItems([]);
-    }
+    const starterItems: Item[] = selectedSpaces.includes('主冰箱') ? [{
+      id: 'starter-1',
+      title: '新鲜纯牛奶',
+      spaceId: initialSpacesBuilt[0].id,
+      spaceName: '主冰箱',
+      location: '主冷藏层柜',
+      remainingPct: 80,
+      buyDate: new Date().toISOString().split('T')[0],
+      expireDate: '2026-12-15',
+      tag: '充足',
+      count: 2,
+      unit: '盒',
+      icon: 'kitchen',
+      remark: '由设置向导自动赠送，开启健康整理记录！'
+    }] : [];
+    setItems(starterItems);
 
     // Set fresh starting assistant message
     const welcomeMessages: Message[] = [
@@ -118,16 +115,22 @@ export default function App() {
       }
     ];
     setMessages(welcomeMessages);
-    saveStoredMessages(welcomeMessages);
+    await saveState({
+      onboardingDone: true,
+      preferences: completePrefs,
+      spaces: initialSpacesBuilt,
+      items: starterItems,
+      messages: welcomeMessages
+    });
 
     setActiveTab('智能面板');
     triggerBannerNotification("🎉 筑巢测绘同步完成！欢迎来到松鼠家园！");
   };
 
   // Add Item to collection
-  const handleAddItem = (newItemParams: Partial<Item>) => {
-    const freshItem: Item = {
-      id: 'item-' + Date.now(),
+  const handleAddItem = async (newItemParams: Partial<Item>) => {
+    const draftItem: Item = {
+      id: newItemParams.id || 'item-' + Date.now(),
       title: newItemParams.title || '无名小坚果',
       spaceId: newItemParams.spaceId || 'kitchen',
       spaceName: newItemParams.spaceName || '主厨房',
@@ -142,15 +145,20 @@ export default function App() {
       remark: newItemParams.remark || '手动登记入账。'
     };
 
-    const newItems = [freshItem, ...items];
+    const freshItem = await createItem(draftItem).catch((error) => {
+      console.error(error);
+      triggerBannerNotification('后端写入失败，已临时保存在当前页面。');
+      return draftItem;
+    });
+    const newItems = [freshItem, ...items.filter((item) => item.id !== freshItem.id)];
     setItems(newItems);
-    saveStoredItems(newItems);
 
     triggerBannerNotification(`📥 已将 1件【${freshItem.title}】归档到储藏洞【${freshItem.spaceName}】！`);
   };
 
   // Update specific item specs
-  const handleUpdateItem = (id: string, updatedParams: Partial<Item>) => {
+  const handleUpdateItem = async (id: string, updatedParams: Partial<Item>) => {
+    const before = items;
     const updated = items.map((item) => {
       if (item.id === id) {
         return { ...item, ...updatedParams };
@@ -158,15 +166,23 @@ export default function App() {
       return item;
     });
     setItems(updated);
-    saveStoredItems(updated);
+    await updateItem(id, updatedParams).catch((error) => {
+      console.error(error);
+      setItems(before);
+      triggerBannerNotification('后端更新失败，已撤回本次修改。');
+    });
   };
 
   // Delete/discard item
-  const handleDeleteItem = (id: string) => {
+  const handleDeleteItem = async (id: string) => {
     const itemToDelete = items.find(i => i.id === id);
     const filtered = items.filter(item => item.id !== id);
     setItems(filtered);
-    saveStoredItems(filtered);
+    await deleteItem(id).catch((error) => {
+      console.error(error);
+      setItems(items);
+      triggerBannerNotification('后端删除失败，已恢复该物品。');
+    });
 
     if (itemToDelete) {
       triggerBannerNotification(`🧹 清空并清除了物品【${itemToDelete.title}】的库存。`);
@@ -174,7 +190,7 @@ export default function App() {
   };
 
   // Consume (reduce ratio)
-  const handleConsumeItem = (id: string, deltaPct: number) => {
+  const handleConsumeItem = async (id: string, deltaPct: number) => {
     const updated = items.map((item) => {
       if (item.id === id) {
         const newPct = Math.max(0, item.remainingPct - deltaPct);
@@ -186,18 +202,24 @@ export default function App() {
       return item;
     });
     setItems(updated);
-    saveStoredItems(updated);
+    const changed = updated.find((item) => item.id === id);
+    if (changed) {
+      await updateItem(id, { remainingPct: changed.remainingPct, tag: changed.tag }).catch((error) => {
+        console.error(error);
+        triggerBannerNotification('消耗状态还没同步到后端，请稍后重试。');
+      });
+    }
   };
 
   // Chat memory sending callback
-  const handleSendChatMessage = (msg: Message) => {
+  const handleSendChatMessage = async (msg: Message) => {
     const updatedMsgs = [...messages, msg];
     setMessages(updatedMsgs);
-    saveStoredMessages(updatedMsgs);
+    await saveState({ messages: updatedMsgs }).catch(console.error);
   };
 
   // AI response logging callback
-  const handleReceiveAIResponse = (text: string, cardData: any) => {
+  const handleReceiveAIResponse = async (text: string, cardData: any) => {
     const aiId = 'ai-' + Date.now();
     const aiMsg: Message = {
       id: aiId,
@@ -216,25 +238,19 @@ export default function App() {
 
     const updated = [...messages, aiMsg];
     setMessages(updated);
-    saveStoredMessages(updated);
+    await saveState({ messages: updated }).catch(console.error);
     triggerBannerNotification("🐿️ 收到松鼠管家新传信呼应！");
   };
 
   // Save Preferences
-  const handleSavePreferences = (updated: SystemPreferences) => {
+  const handleSavePreferences = async (updated: SystemPreferences) => {
     setPreferences(updated);
-    saveStoredPreferences(updated);
+    await saveState({ preferences: updated }).catch(console.error);
     triggerBannerNotification("⚙️ 系统阈值/AI设定偏好保存生效！");
   };
 
   // Absolute Wipe database
-  const handleResetAllData = () => {
-    localStorage.removeItem('nest_spaces');
-    localStorage.removeItem('nest_items');
-    localStorage.removeItem('nest_messages');
-    localStorage.removeItem('nest_preferences');
-    localStorage.setItem('nest_onboarding_done', 'false');
-
+  const handleResetAllData = async () => {
     // Reset local component references
     setOnboardingDoneState(false);
     setItems(INITIAL_ITEMS);
@@ -242,7 +258,22 @@ export default function App() {
     setMessages(INITIAL_MESSAGES);
     setPreferences(DEFAULT_PREFERENCES);
     setActiveTab('智能面板');
+    await saveState({
+      onboardingDone: false,
+      items: INITIAL_ITEMS,
+      spaces: INITIAL_SPACES,
+      messages: INITIAL_MESSAGES,
+      preferences: DEFAULT_PREFERENCES
+    }).catch(console.error);
   };
+
+  if (!isServerReady) {
+    return (
+      <div className="min-h-screen bg-background text-on-surface flex items-center justify-center font-black">
+        正在连接松鼠筑巢后端...
+      </div>
+    );
+  }
 
   // Onboarding View bypass if false
   if (!onboardingDone) {
@@ -336,7 +367,11 @@ export default function App() {
       </header>
 
       {/* Core Panel Content view */}
-      <main className="flex-grow px-6 md:px-12 max-w-6xl w-full mx-auto">
+      <main className={`flex-grow w-full mx-auto ${
+        activeTab === '松鼠助手'
+          ? 'max-w-[min(1200px,calc(100vw-1.5rem))] px-3 md:px-6'
+          : 'max-w-6xl px-6 md:px-12'
+      }`}>
         
         {activeTab === '智能面板' && (
           <DashboardView 

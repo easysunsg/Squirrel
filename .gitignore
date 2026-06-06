@@ -1,3 +1,5 @@
 ./.idea
 ./docs
 ./stitch_logo
+data/
+storage/

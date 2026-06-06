@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Message, Item, Space } from '../types';
-import { Send, Sparkles, Mic, BarChart2, PlusCircle, CheckCircle, Image, User, Volume2, HelpCircle, Archive, Edit } from 'lucide-react';
+import { Send, Mic, User, Volume2 } from 'lucide-react';
 
 interface AssistantViewProps {
   messages: Message[];
@@ -114,10 +114,10 @@ export default function AssistantView({
   };
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-4 border-2 border-on-surface rounded-2xl overflow-hidden bg-white mt-4 h-[calc(100vh-160px)] shadow-[6px_6px_0px_0px_rgba(27,28,28,1)]">
+    <div className="grid max-h-[calc(100svh-230px)] min-h-[520px] w-full min-w-0 grid-cols-1 overflow-hidden rounded-2xl border-2 border-on-surface bg-white shadow-[6px_6px_0px_0px_rgba(27,28,28,1)] md:grid-cols-[minmax(180px,260px)_minmax(0,1fr)]">
       
       {/* Left Sidebar Menu: History Chat Records */}
-      <div className="md:col-span-1 bg-surface-container-low border-r-2 border-on-surface flex flex-col p-4 select-none">
+      <div className="min-w-0 bg-surface-container-low border-b-2 border-on-surface p-3 select-none md:flex md:flex-col md:border-b-0 md:border-r-2 md:p-4 md:overflow-y-auto">
         <button 
           onClick={() => {
             alert("正在清理小松鼠的大脑，准备启动全新对话新纪元啦～");
@@ -129,18 +129,18 @@ export default function AssistantView({
           ➕ 新建对话
         </button>
 
-        <div className="mt-6 flex-grow">
+        <div className="mt-4 md:mt-6 md:flex-grow">
           <h4 className="text-xs font-black text-on-surface-variant uppercase tracking-wider mb-3">最近对话</h4>
-          <div className="space-y-2">
+          <div className="flex gap-2 overflow-x-auto pb-1 md:block md:space-y-2 md:overflow-visible md:pb-0">
             {historyList.map((hist) => (
               <button
                 key={hist.id}
                 onClick={() => {
                   handleSend(`帮我回顾：${hist.title}`);
                 }}
-                className="w-full text-left p-3 rounded-lg border border-on-surface/20 hover:border-on-surface hover:bg-white text-xs font-bold text-on-surface truncate block transition-all"
+                className="block min-w-44 rounded-lg border border-on-surface/20 p-3 text-left text-xs font-bold text-on-surface transition-all hover:border-on-surface hover:bg-white md:w-full md:min-w-0"
               >
-                🌰 {hist.title}
+                <span className="block truncate">🌰 {hist.title}</span>
                 <span className="block text-[10px] text-on-surface-variant/70 mt-1 font-normal">{hist.date}</span>
               </button>
             ))}
@@ -148,16 +148,16 @@ export default function AssistantView({
         </div>
 
         {/* Sync memory footer */}
-        <div className="p-3 bg-secondary-fixed rounded-xl border border-on-surface text-[10px] text-on-secondary-fixed font-bold leading-relaxed shadow-[1px_1px_0px_0px_#000]">
+        <div className="mt-3 hidden rounded-xl border border-on-surface bg-secondary-fixed p-3 text-[10px] font-bold leading-relaxed text-on-secondary-fixed shadow-[1px_1px_0px_0px_#000] md:block">
           🐿️ 小知识：松鼠大脑最多能记住自己在森林里埋藏的200个坚果洞位置哦！比我们更记性好呢！
         </div>
       </div>
 
       {/* Right Core thread column (3 cols) */}
-      <div className="md:col-span-3 flex flex-col h-full bg-surface-container-lowest">
+      <div className="flex min-h-0 min-w-0 flex-col bg-surface-container-lowest">
         
         {/* Chat Thread Area */}
-        <div className="flex-grow overflow-y-auto p-6 space-y-6 max-h-[calc(100vh-320px)]">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 md:space-y-6 md:p-6">
           {messages.map((msg) => {
             const isUser = msg.sender === 'user';
             return (
@@ -166,12 +166,12 @@ export default function AssistantView({
                 className={`flex gap-4 ${isUser ? 'flex-row-reverse' : 'flex-row'} items-start`}
               >
                 {/* Avatar */}
-                <div className={`w-10 h-10 rounded-full border-2 border-on-surface flex items-center justify-center ${isUser ? 'bg-primary-container text-white' : 'bg-white'} shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]`}>
+                <div className={`h-9 w-9 shrink-0 rounded-full border-2 border-on-surface flex items-center justify-center md:h-10 md:w-10 ${isUser ? 'bg-primary-container text-white' : 'bg-white'} shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]`}>
                   {isUser ? <User className="w-5 h-5" /> : <span className="text-xl">🐿️</span>}
                 </div>
 
                 {/* Content Bubble */}
-                <div className="max-w-[75%] space-y-2">
+                <div className="max-w-[min(78%,42rem)] min-w-0 space-y-2 break-words">
                   
                   {/* Speech or raw message */}
                   {msg.type === 'welcome' && (
@@ -189,7 +189,7 @@ export default function AssistantView({
                   )}
 
                   {msg.type === 'text' && (
-                    <div className={`border-2 border-on-surface p-3.5 rounded-2xl shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] ${isUser ? 'bg-primary-fixed text-on-primary-fixed' : 'bg-white text-on-surface'} text-sm font-bold leading-relaxed`}>
+                    <div className={`rounded-2xl border-2 border-on-surface p-3 text-sm font-bold leading-relaxed shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] md:p-3.5 ${isUser ? 'bg-primary-fixed text-on-primary-fixed' : 'bg-white text-on-surface'}`}>
                       {msg.text}
                     </div>
                   )}
@@ -197,14 +197,14 @@ export default function AssistantView({
                   {msg.type === 'voice' && (
                     <div 
                       onClick={() => togglePlayVoice(msg.id)}
-                      className="border-2 border-on-surface bg-white p-3 rounded-2xl shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] flex items-center gap-4 cursor-pointer hover:bg-surface-container-low transition-colors"
+                      className="flex max-w-full cursor-pointer items-center gap-3 overflow-hidden rounded-2xl border-2 border-on-surface bg-white p-3 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] transition-colors hover:bg-surface-container-low md:gap-4"
                     >
                       <div className="bg-primary text-white p-2 rounded-full border border-on-surface">
                         <Volume2 className={`w-4 h-4 ${playingVoiceId === msg.id ? 'animate-bounce' : ''}`} />
                       </div>
                       
                       {/* Interactive sound track visualization bar */}
-                      <div className="flex gap-0.5 items-center">
+                      <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
                         {[1, 2, 3, 4, 3, 2, 1, 2, 4, 5, 4, 2, 3, 4, 3, 1, 2, 4, 1].map((val, idx) => {
                           const playHeight = playingVoiceId === msg.id ? (Math.random() * 16 + 4) : (val * 4);
                           return (
@@ -289,7 +289,7 @@ export default function AssistantView({
         </div>
 
         {/* Suggestion pill badges */}
-        <div className="px-6 py-2 flex flex-wrap gap-2 border-t border-on-surface/10 bg-white select-none">
+        <div className="flex shrink-0 gap-2 overflow-x-auto border-t border-on-surface/10 bg-white px-4 py-2 select-none md:flex-wrap md:overflow-visible md:px-6">
           {suggestions.map((sug, i) => (
             <button
               key={i}
@@ -297,7 +297,7 @@ export default function AssistantView({
                 setInputText(sug.text);
                 handleSend(sug.text);
               }}
-              className="text-xs font-bold bg-secondary-fixed text-on-secondary-fixed px-3 py-1.5 rounded-full border-2 border-on-surface shadow-[2px_2px_0px_0px_#000] hover:translate-x-px duration-75 cursor-pointer"
+              className="shrink-0 rounded-full border-2 border-on-surface bg-secondary-fixed px-3 py-1.5 text-xs font-bold text-on-secondary-fixed shadow-[2px_2px_0px_0px_#000] duration-75 hover:translate-x-px cursor-pointer"
             >
               {sug.text}
             </button>
@@ -305,7 +305,7 @@ export default function AssistantView({
         </div>
 
         {/* Entry Zone bottom bar */}
-        <div className="p-4 border-t-2 border-on-surface bg-white flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-2 border-t-2 border-on-surface bg-white p-3 md:gap-3 md:p-4">
           <button 
             onClick={() => {
               const speakText = prompt("模拟语音录入 (输入你想吩咐松鼠说的语音词)：", "帮我看一下工具箱里的螺丝刀还在不");
@@ -322,7 +322,7 @@ export default function AssistantView({
                 handleSend(speakText);
               }
             }}
-            className="p-3 bg-secondary-fixed text-on-secondary-fixed rounded-xl border-2 border-on-surface shadow-[2px_2px_0px_0px_#000] active:translate-y-px cursor-pointer" 
+            className="shrink-0 rounded-xl border-2 border-on-surface bg-secondary-fixed p-3 text-on-secondary-fixed shadow-[2px_2px_0px_0px_#000] active:translate-y-px cursor-pointer" 
             title="点击模拟麦克风进行语音录入录音"
           >
             <Mic className="w-5 h-5" />
@@ -336,13 +336,13 @@ export default function AssistantView({
               if (e.key === 'Enter') handleSend(inputText);
             }}
             placeholder="输入想要吩咐的事情，比如『家里还有面包吗』或『存入洗洁精2瓶』..." 
-            className="flex-grow border-2 border-on-surface p-3 rounded-xl font-medium focus:outline-none focus:ring-2 focus:ring-primary/20 text-sm"
+            className="min-w-0 flex-1 rounded-xl border-2 border-on-surface p-3 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/20"
           />
 
           <button 
             onClick={() => handleSend(inputText)}
             disabled={!inputText.trim()}
-            className="p-3 bg-primary text-white rounded-xl border-2 border-on-surface shadow-[2px_2px_0px_0px_#000] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            className="shrink-0 rounded-xl border-2 border-on-surface bg-primary p-3 text-white shadow-[2px_2px_0px_0px_#000] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
           >
             <Send className="w-5 h-5 fill-current" />
           </button>

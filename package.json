@@ -1,0 +1,12 @@
+{
+  "name": "squirrel-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "server": "cd server && uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
+    "web": "npm --prefix 松鼠筑巢 run dev",
+    "cli": "go run ./cli",
+    "lint": "npm --prefix 松鼠筑巢 run lint"
+  }
+}
