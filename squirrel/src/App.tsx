@@ -150,8 +150,10 @@ export default function App() {
       triggerBannerNotification('后端写入失败，已临时保存在当前页面。');
       return draftItem;
     });
-    const newItems = [freshItem, ...items.filter((item) => item.id !== freshItem.id)];
-    setItems(newItems);
+    setItems((currentItems) => [
+      freshItem,
+      ...currentItems.filter((item) => item.id !== freshItem.id)
+    ]);
 
     triggerBannerNotification(`📥 已将 1件【${freshItem.title}】归档到储藏洞【${freshItem.spaceName}】！`);
   };
@@ -327,10 +329,10 @@ export default function App() {
         {/* Tab Navigator */}
         <nav className="flex flex-wrap gap-2 md:gap-3 bg-white border-2 border-on-surface px-3 py-2 rounded-full shadow-[3px_3px_0px_0px_rgba(27,28,28,1)]" id="main_tabs">
           {[
-            { id: '智能面板', icon: <Home className="w-4 h-4" /> },
-            { id: '松鼠助手', icon: <MessageCircle className="w-4 h-4" /> },
-            { id: '库存管理', icon: <Archive className="w-4 h-4" /> },
-            { id: '参数设定', icon: <Settings className="w-4 h-4" /> },
+            { id: '仓储大盘', icon: <Home className="w-4 h-4" /> },
+            { id: '树洞聊斋', icon: <MessageCircle className="w-4 h-4" /> },
+            { id: '小窝存根', icon: <Archive className="w-4 h-4" /> },
+            { id: '控制阀阁', icon: <Settings className="w-4 h-4" /> },
           ].map((tab) => {
             const isSelected = activeTab === tab.id;
             return (
