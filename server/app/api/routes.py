@@ -1,13 +1,26 @@
+import logging
+
 from fastapi import APIRouter, HTTPException, Query
 
 from app.core.config import settings
-from app.db.sqlite import connect, delete_item, get_state, init_db, list_items, replace_state, upsert_item
-from app.models.schemas import AppState, ChatRequest, Item, RecipeRequest, TextRequest
+from app.db.sqlite import (
+    connect,
+    delete_item,
+    get_state,
+    init_db,
+    list_items,
+    list_messages,
+    replace_messages,
+    replace_state,
+    upsert_item,
+)
+from app.models.schemas import AppState, ChatRequest, Item, Message, RecipeRequest, TextRequest
 from app.services.ai import ai_service
 from app.services.markdown import item_status, sync_inventory_markdown
 from app.services.vector_store import vector_store
 
 router = APIRouter(prefix="/api")
+logger = logging.getLogger(__name__)
 
 
 def sync_outputs() -> AppState:
@@ -56,12 +69,29 @@ def read_items(status: str = Query(default="all")):
 
 @router.post("/items", response_model=Item, status_code=201)
 def create_item(item: Item):
-    with connect() as conn:
-        created = upsert_item(conn, item)
-        state = get_state(conn)
-    sync_inventory_markdown(state)
-    vector_store.upsert_items([created])
-    return created
+    logger.info(
+        "Creating inventory item title=%r spaceId=%r spaceName=%r location=%r",
+        item.title,
+        item.spaceId,
+        item.spaceName,
+        item.location,
+    )
+    try:
+        with connect() as conn:
+            created = upsert_item(conn, item)
+            state = get_state(conn)
+        sync_inventory_markdown(state)
+        vector_store.upsert_items([created])
+        logger.info(
+            "Created inventory item id=%r title=%r totalItems=%d",
+            created.id,
+            created.title,
+            len(state.items),
+        )
+        return created
+    except Exception:
+        logger.exception("Failed to create inventory item title=%r", item.title)
+        raise
 
 
 @router.patch("/items/{item_id}", response_model=Item)
@@ -108,26 +138,91 @@ def remove_item(item_id: str):
 
 @router.post("/lightning")
 def lightning(request: TextRequest):
-    return {"items": ai_service.parse_inventory_command(request.text)}
+    logger.info("Lightning parse requested textLength=%d text=%r", len(request.text), request.text)
+    try:
+        items = ai_service.parse_inventory_command(request.text)
+        logger.info(
+            "Lightning parse completed parsedCount=%d titles=%s",
+            len(items),
+            [item.title for item in items],
+        )
+        return {"items": items}
+    except Exception:
+        logger.exception("Lightning parse failed text=%r", request.text)
+        raise
 
 
 @router.post("/cli/add", status_code=201)
 def cli_add(request: TextRequest):
-    parsed = ai_service.parse_inventory_command(request.text)
-    with connect() as conn:
-        created = [upsert_item(conn, item) for item in parsed]
-        state = get_state(conn)
-    sync_inventory_markdown(state)
-    vector_store.upsert_items(created)
-    return {"items": created}
+    logger.info("CLI add requested textLength=%d text=%r", len(request.text), request.text)
+    try:
+        parsed = ai_service.parse_inventory_command(request.text)
+        logger.info(
+            "CLI add parsed parsedCount=%d titles=%s",
+            len(parsed),
+            [item.title for item in parsed],
+        )
+        with connect() as conn:
+            created = [upsert_item(conn, item) for item in parsed]
+            state = get_state(conn)
+        sync_inventory_markdown(state)
+        vector_store.upsert_items(created)
+        logger.info(
+            "CLI add completed createdCount=%d ids=%s totalItems=%d",
+            len(created),
+            [item.id for item in created],
+            len(state.items),
+        )
+        return {"items": created}
+    except Exception:
+        logger.exception("CLI add failed text=%r", request.text)
+        raise
 
 
 @router.post("/chat")
 def chat(request: ChatRequest):
-    latest = request.chatHistory[-1].text if request.chatHistory else ""
     with connect() as conn:
+        history = request.chatHistory or list_messages(conn)
         inventory = request.currentInventory or list_items(conn)
-    return {"text": ai_service.chat(latest, inventory), "cardData": None}
+        latest = history[-1].text if history else ""
+        reply = ai_service.chat(latest, inventory)
+        assistant_message = Message(
+            id=f"msg-ai-{len(history) + 1}",
+            sender="assistant",
+            text=reply,
+            timestamp="刚刚",
+        )
+        full_history = [*history, assistant_message]
+        replace_messages(conn, full_history)
+    return {"reply": reply, "itemSuggestion": None, "messages": full_history}
+
+
+@router.get("/messages")
+def read_messages():
+    with connect() as conn:
+        return {"messages": list_messages(conn)}
+
+
+@router.put("/messages")
+def write_messages(messages: list[Message]):
+    with connect() as conn:
+        replace_messages(conn, messages)
+        stored = list_messages(conn)
+    return {"messages": stored}
+
+
+@router.delete("/messages")
+def clear_messages():
+    reset_message = Message(
+        id="msg-init-reset",
+        sender="assistant",
+        text="聊天记录已经清空，我们可以重新开始。",
+        timestamp="刚刚",
+        type="welcome",
+    )
+    with connect() as conn:
+        replace_messages(conn, [reset_message])
+    return {"messages": [reset_message]}
 
 
 @router.post("/recipe")

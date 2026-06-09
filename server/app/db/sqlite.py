@@ -146,7 +146,8 @@ def init_db() -> None:
                 timestamp TEXT NOT NULL,
                 type TEXT NOT NULL,
                 voice_duration TEXT,
-                action_card TEXT
+                action_card TEXT,
+                item_suggestion TEXT
             );
 
             CREATE TABLE IF NOT EXISTS preferences (
@@ -160,6 +161,10 @@ def init_db() -> None:
             );
             """
         )
+
+        message_columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+        if "item_suggestion" not in message_columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN item_suggestion TEXT")
 
         if conn.execute("SELECT COUNT(*) FROM spaces").fetchone()[0] == 0:
             replace_spaces(conn, DEFAULT_SPACES)
@@ -294,12 +299,13 @@ def replace_messages(conn: sqlite3.Connection, messages: list[Message]) -> None:
     conn.execute("DELETE FROM messages")
     for message in messages:
         action_card = json.dumps(message.actionCard, ensure_ascii=False) if message.actionCard else None
+        item_suggestion = json.dumps(message.itemSuggestion, ensure_ascii=False) if message.itemSuggestion else None
         conn.execute(
             """
             INSERT INTO messages(
-                id, sender, text, timestamp, type, voice_duration, action_card
+                id, sender, text, timestamp, type, voice_duration, action_card, item_suggestion
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 message.id,
@@ -309,6 +315,7 @@ def replace_messages(conn: sqlite3.Connection, messages: list[Message]) -> None:
                 message.type,
                 message.voiceDuration,
                 action_card,
+                item_suggestion,
             ),
         )
 
@@ -324,6 +331,7 @@ def list_messages(conn: sqlite3.Connection) -> list[Message]:
             type=row["type"],
             voiceDuration=row["voice_duration"],
             actionCard=json.loads(row["action_card"]) if row["action_card"] else None,
+            itemSuggestion=json.loads(row["item_suggestion"]) if row["item_suggestion"] else None,
         )
         for row in rows
     ]

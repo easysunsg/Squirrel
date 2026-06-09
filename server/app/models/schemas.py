@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 ItemTag = Literal["告急", "较低", "充足", "过期预警"]
 
@@ -40,10 +40,11 @@ class Message(BaseModel):
     type: Literal["text", "voice", "action_card", "welcome"] = "text"
     voiceDuration: str | None = None
     actionCard: dict[str, Any] | None = None
+    itemSuggestion: dict[str, Any] | None = None
 
 
 class SystemPreferences(BaseModel):
-    allergies: list[str] = []
+    allergies: list[str] = Field(default_factory=list)
     lifestyle: str = "均衡饮食"
     warningThreshold: int = 5
     lowThreshold: int = 15
@@ -67,11 +68,17 @@ class TextRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    chatHistory: list[Message] = []
-    currentInventory: list[Item] = []
+    chatHistory: list[Message] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("chatHistory", "messages"),
+    )
+    currentInventory: list[Item] = Field(default_factory=list)
+    personality: str | None = None
+    habits: list[str] = Field(default_factory=list)
+    locations: list[str] = Field(default_factory=list)
 
 
 class RecipeRequest(BaseModel):
-    inventory: list[Item] = []
+    inventory: list[Item] = Field(default_factory=list)
     excludedRecipeTitle: str | None = None
     systemPreferences: SystemPreferences | None = None

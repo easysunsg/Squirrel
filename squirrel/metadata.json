@@ -1,6 +1,6 @@
 {
-  "name": "Squirrel",
-  "description": "Squirrel智能家居管家，可爱的涂鸦风手绘感生活整理与库存管理系统，配备闪电录入、AI智能排期食谱与库存洞空间整理助手。",
+  "name": "松鼠筑巢",
+  "description": "打造专属松鼠小窝的智能家居整理与库存管理管家，内置AI管家。以手绘涂鸦风格（Doodle-Core）呈现，帮助您轻松管理主冰箱、厨房储物柜、玄关柜等生活空间，自动保质期预警，个性化AI管家性格定制。",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

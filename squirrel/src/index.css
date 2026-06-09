@@ -1,65 +1,103 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&family=Plus+Jakarta+Sans:wght@400;500;700&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-headline: "Outfit", sans-serif;
-
-  --color-background: #fcf9f8;
-  --color-on-background: #1b1c1c;
-  --color-surface: #fcf9f8;
-  --color-surface-dim: #dcd9d9;
-  --color-surface-bright: #fcf9f8;
-  --color-surface-container-lowest: #ffffff;
-  --color-surface-container-low: #f6f3f2;
-  --color-surface-container: #f0eded;
-  --color-surface-container-high: #eae7e7;
-  --color-surface-container-highest: #e5e2e1;
-  --color-surface-variant: #e5e2e1;
-  --color-on-surface: #1b1c1c;
-  --color-on-surface-variant: #5a4045;
-  --color-outline: #8e6f75;
-  --color-outline-variant: #e2bdc3;
-
-  --color-primary: #b70052;
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui;
+  --font-display: "Bricolage Grotesque", sans-serif;
+  
   --color-on-primary: #ffffff;
-  --color-primary-container: #dd2269;
-  --color-on-primary-container: #fffbff;
-  --color-primary-fixed: #ffd9df;
-  --color-primary-fixed-dim: #ffb1c1;
-  --color-on-primary-fixed: #3f0018;
-  --color-on-primary-fixed-variant: #8f003f;
-
-  --color-secondary: #006e1c;
-  --color-on-secondary: #ffffff;
-  --color-secondary-container: #91f78e;
-  --color-on-secondary-container: #00390b;
-  --color-secondary-fixed: #94f990;
-  --color-secondary-fixed-dim: #78dc77;
-  --color-on-secondary-fixed: #002204;
+  --color-surface-dim: #dcd9d9;
+  --color-outline: #8e6f75;
   --color-on-secondary-fixed-variant: #005313;
-
-  --color-tertiary: #695f00;
-  --color-on-tertiary: #ffffff;
-  --color-tertiary-container: #bdad00;
-  --color-on-tertiary-container: #201c00;
-  --color-tertiary-fixed: #f9e534;
+  --color-on-surface: #1b1c1c;
+  --color-surface-container-lowest: #ffffff;
+  --color-inverse-surface: #303030;
   --color-tertiary-fixed-dim: #dbc90a;
-  --color-on-tertiary-fixed: #201c00;
-  --color-on-tertiary-fixed-variant: #4f4800;
-
-  --color-error: #ba1a1a;
-  --color-on-error: #ffffff;
-  --color-error-container: #ffdad6;
+  --color-primary-fixed: #ffd9df;
   --color-on-error-container: #93000a;
+  --color-outline-variant: #e2bdc3;
+  --color-on-tertiary-fixed: #201c00;
+  --color-on-error: #ffffff;
+  --color-on-tertiary: #ffffff;
+  --color-surface-container-highest: #e5e2e1;
+  --color-surface-container: #f0eded;
+  --color-background: #fcf9f8;
+  --color-surface-variant: #e5e2e1;
+  --color-secondary-fixed: #94f990;
+  --color-on-secondary-container: #00731e;
+  --color-surface: #fcf9f8;
+  --color-on-primary-fixed: #3f0018;
+  --color-on-secondary-fixed: #002204;
+  --color-on-secondary: #ffffff;
+  --color-surface-container-high: #eae7e7;
+  --color-primary-container: #dd2269;
+  --color-primary: #b70052;
+  --color-tertiary-fixed: #f9e534;
+  --color-tertiary: #695f00;
+  --color-error-container: #ffdad6;
+  --color-on-primary-fixed-variant: #8f003f;
+  --color-surface-tint: #bb0054;
+  --color-secondary-container: #91f78e;
+  --color-inverse-on-surface: #f3f0ef;
+  --color-on-tertiary-fixed-variant: #4f4800;
+  --color-on-primary-container: #fffbff;
+  --color-secondary: #006e1c;
+  --color-inverse-primary: #ffb1c1;
+  --color-tertiary-container: #bdad00;
+  --color-surface-container-low: #f6f3f2;
+  --color-secondary-fixed-dim: #78dc77;
+  --color-surface-bright: #fcf9f8;
+  --color-primary-fixed-dim: #ffb1c1;
+  --color-on-background: #1b1c1c;
+  --color-error: #ba1a1a;
+  --color-on-tertiary-container: #474000;
+  --color-on-surface-variant: #5a4045;
 }
 
-body {
-  background-color: #fcf9f8;
-  font-family: var(--font-sans);
+/* Doodle Style Utility Classes */
+.doodle-border {
+  border: 2px solid #1b1c1c;
 }
 
-.font-headline-lg {
-  font-family: var(--font-headline);
-  font-weight: 900;
+.hard-shadow {
+  box-shadow: 4px 4px 0px 0px #1b1c1c;
+}
+
+.hard-shadow-sm {
+  box-shadow: 2px 2px 0px 0px #1b1c1c;
+}
+
+.active-press {
+  transition: transform 0.05s ease-out, box-shadow 0.05s ease-out;
+}
+
+.active-press:active {
+  transform: translate(2px, 2px);
+  box-shadow: 0px 0px 0px 0px #1b1c1c;
+}
+
+.active-press-sm:active {
+  transform: translate(1px, 1px);
+  box-shadow: 0px 0px 0px 0px #1b1c1c;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+
+.bg-paper {
+  background-image: radial-gradient(#e5e2e1 0.5px, transparent 0.5px);
+  background-size: 20px 20px;
+}
+
+/* Material Symbols Integration if used as fallback, though we use Lucide-react */
+.wave-bar {
+  width: 3px;
+  background: currentColor;
+  border-radius: 10px;
 }

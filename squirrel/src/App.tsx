@@ -1,437 +1,366 @@
-import React, { useState, useEffect } from 'react';
-import { Space, Item, Message, SystemPreferences } from './types';
-import { 
-  INITIAL_ITEMS, INITIAL_SPACES, INITIAL_MESSAGES, DEFAULT_PREFERENCES
-} from './data';
-import { createItem, deleteItem, fetchState, saveState, updateItem } from './api';
+import React, { useEffect, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
+import {
+  Archive,
+  LayoutDashboard,
+  Menu,
+  MessageSquare,
+  Settings as SettingsIcon,
+  X,
+} from "lucide-react";
+import { ChatTab } from "./components/ChatTab";
+import { DashboardTab } from "./components/DashboardTab";
+import { Drawer } from "./components/Drawer";
+import { InventoryTab } from "./components/InventoryTab";
+import { Onboarding } from "./components/Onboarding";
+import { SettingsTab } from "./components/SettingsTab";
+import { AppSettings, ChatMessage, DrawerActionType, InventoryItem } from "./types";
+import { DEFAULT_INVENTORY_ITEMS } from "./utils";
 
-import OnboardingView from './components/OnboardingView';
-import DashboardView from './components/DashboardView';
-import AssistantView from './components/AssistantView';
-import InventoryView from './components/InventoryView';
-import SettingsView from './components/SettingsView';
+const DEFAULT_SETTINGS: AppSettings = {
+  onboardingComplete: false,
+  selectedLocations: ["主冰箱", "厨房储物柜", "玄关柜"],
+  dietaryHabits: [],
+  lifestyleTag: "减脂增肌中",
+  reminderTime: "18:00",
+  expirationStrategy: "normal",
+  squirrelPersonality: "humorous",
+};
 
-import { Home, MessageCircle, Archive, Settings, Bell } from 'lucide-react';
+const DEFAULT_CHAT_MESSAGE: ChatMessage = {
+  id: "msg-init-local",
+  sender: "assistant",
+  text: "欢迎来到松鼠树洞，我们可以开始记录库存、整理物品，或者直接聊天。",
+  timestamp: "刚刚",
+};
+
+function normalizeMessage(message: Partial<ChatMessage>, index: number): ChatMessage {
+  return {
+    id: message.id || `msg-${index}-${Date.now()}`,
+    sender: message.sender === "user" ? "user" : "assistant",
+    text: message.text || "",
+    timestamp: message.timestamp || "刚刚",
+    itemSuggestion: message.itemSuggestion,
+  };
+}
 
 export default function App() {
-  // 1. Initial State Loaders
-  const [onboardingDone, setOnboardingDoneState] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<string>('智能面板');
-  const [items, setItems] = useState<Item[]>([]);
-  const [spaces, setSpaces] = useState<Space[]>([]);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [preferences, setPreferences] = useState<SystemPreferences>(DEFAULT_PREFERENCES);
-  const [isServerReady, setIsServerReady] = useState(false);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [items, setItems] = useState<InventoryItem[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([DEFAULT_CHAT_MESSAGE]);
+  const [activeTab, setActiveTab] = useState("dashboard");
+  const [chatPreinput, setChatPreinput] = useState("");
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [drawerAction, setDrawerAction] = useState<DrawerActionType>("view");
+  const [selectedDrawerItem, setSelectedDrawerItem] = useState<InventoryItem | null>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const [notification, setNotification] = useState<string | null>(null);
-
-  // Load everything on startup
   useEffect(() => {
-    fetchState()
-      .then((state) => {
-        setOnboardingDoneState(state.onboardingDone);
-        setItems(state.items);
-        setSpaces(state.spaces);
-        setMessages(state.messages);
-        setPreferences(state.preferences);
-        setIsServerReady(true);
-      })
-      .catch((error) => {
-        console.error(error);
-        setOnboardingDoneState(true);
-        setItems(INITIAL_ITEMS);
-        setSpaces(INITIAL_SPACES);
-        setMessages(INITIAL_MESSAGES);
-        setPreferences(DEFAULT_PREFERENCES);
-        setIsServerReady(true);
-        triggerBannerNotification('后端暂时未连接，当前显示前端示例数据。');
-      });
+    const savedConfig = localStorage.getItem("squirrel_nest_settings");
+    if (savedConfig) {
+      try {
+        setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(savedConfig) });
+      } catch (error) {
+        console.error("Failed to read settings from localStorage", error);
+      }
+    }
+
+    const savedItems = localStorage.getItem("squirrel_nest_inventory");
+    if (savedItems) {
+      try {
+        setItems(JSON.parse(savedItems));
+      } catch (error) {
+        console.error("Failed to read inventory from localStorage", error);
+        setItems(DEFAULT_INVENTORY_ITEMS);
+      }
+    } else {
+      setItems(DEFAULT_INVENTORY_ITEMS);
+      localStorage.setItem("squirrel_nest_inventory", JSON.stringify(DEFAULT_INVENTORY_ITEMS));
+    }
+
+    const loadMessages = async () => {
+      try {
+        const response = await fetch("/api/messages");
+        if (!response.ok) {
+          throw new Error(`Failed to load messages: ${response.status}`);
+        }
+        const data = await response.json();
+        const nextMessages = Array.isArray(data.messages)
+          ? data.messages.map(normalizeMessage)
+          : [DEFAULT_CHAT_MESSAGE];
+        setMessages(nextMessages.length > 0 ? nextMessages : [DEFAULT_CHAT_MESSAGE]);
+      } catch (error) {
+        console.error("Failed to load messages from server", error);
+        const savedChat = localStorage.getItem("squirrel_nest_chat_hist");
+        if (savedChat) {
+          try {
+            setMessages(JSON.parse(savedChat));
+            return;
+          } catch (parseError) {
+            console.error("Failed to read local chat history", parseError);
+          }
+        }
+        setMessages([DEFAULT_CHAT_MESSAGE]);
+      }
+    };
+
+    void loadMessages();
   }, []);
 
-  // Show a temporary banner notification
-  const triggerBannerNotification = (text: string) => {
-    setNotification(text);
-    setTimeout(() => {
-      setNotification(null);
-    }, 4500);
+  useEffect(() => {
+    localStorage.setItem("squirrel_nest_chat_hist", JSON.stringify(messages));
+  }, [messages]);
+
+  const saveSettingsToStorage = (nextSettings: AppSettings) => {
+    setSettings(nextSettings);
+    localStorage.setItem("squirrel_nest_settings", JSON.stringify(nextSettings));
   };
 
-  // --- Core State Callbacks ---
+  const saveItemsToStorage = (nextItems: InventoryItem[]) => {
+    setItems(nextItems);
+    localStorage.setItem("squirrel_nest_inventory", JSON.stringify(nextItems));
+  };
 
-  // Onboarding completion handler
-  const handleOnboardingComplete = async (newPrefs: Partial<SystemPreferences>, selectedSpaces: string[]) => {
-    // 1. Set onboard state
-    setOnboardingDoneState(true);
+  const handleOnboardingComplete = (nextSettings: AppSettings) => {
+    saveSettingsToStorage(nextSettings);
+    setActiveTab("dashboard");
+  };
 
-    // 2. Build initialized spaces
-    const initialSpacesBuilt: Space[] = selectedSpaces.map((name, i) => {
-      const ids = ['refri', '柜子', 'entrance', 'meds', 'vanity', 'other'];
-      const icons = ['kitchen', 'shelves', 'garage', 'kitchen', 'kitchen', 'kitchen'];
-      const bgClasses = ['bg-primary-fixed', 'bg-tertiary-fixed', 'bg-secondary-fixed', 'bg-primary-fixed', 'bg-tertiary-fixed', 'bg-secondary-fixed'];
-      
-      return {
-        id: `space-${i}-${Date.now()}`,
-        name: name,
-        icon: icons[i % icons.length],
-        count: i === 0 ? 3 : 0,
-        warnCount: 0,
-        bgClass: bgClasses[i % bgClasses.length],
-        textColor: 'text-on-surface',
-        badgeColor: 'bg-secondary-container'
-      };
-    });
+  const handleSaveItem = (itemToSave: InventoryItem) => {
+    const exists = items.some((item) => item.id === itemToSave.id);
+    const nextItems = exists
+      ? items.map((item) => (item.id === itemToSave.id ? itemToSave : item))
+      : [itemToSave, ...items];
+    saveItemsToStorage(nextItems);
+  };
 
-    // Save defaults
-    const completePrefs = { ...preferences, ...newPrefs };
-    setPreferences(completePrefs);
+  const handleDeleteItem = (id: string) => {
+    saveItemsToStorage(items.filter((item) => item.id !== id));
+  };
 
-    setSpaces(initialSpacesBuilt);
+  const handleQuickCleanItem = (id: string) => {
+    saveItemsToStorage(items.filter((item) => item.id !== id));
+  };
 
-    const starterItems: Item[] = selectedSpaces.includes('主冰箱') ? [{
-      id: 'starter-1',
-      title: '新鲜纯牛奶',
-      spaceId: initialSpacesBuilt[0].id,
-      spaceName: '主冰箱',
-      location: '主冷藏层柜',
-      remainingPct: 80,
-      buyDate: new Date().toISOString().split('T')[0],
-      expireDate: '2026-12-15',
-      tag: '充足',
-      count: 2,
-      unit: '盒',
-      icon: 'kitchen',
-      remark: '由设置向导自动赠送，开启健康整理记录！'
-    }] : [];
-    setItems(starterItems);
+  const handleSetMessages = (nextMessages: ChatMessage[]) => {
+    setMessages(nextMessages);
+  };
 
-    // Set fresh starting assistant message
-    const welcomeMessages: Message[] = [
-      {
-        id: 'msg-start',
-        sender: 'assistant',
-        text: `哈喽！恭喜开启Squirrel，我们已成功测绘了您的 ${selectedSpaces.join('、')} 物理生活空间！🐿️有什么录入的新采购或清理，随时吩咐小松鼠哦～`,
-        timestamp: '刚刚',
-        type: 'welcome'
+  const handleClearChatHistory = async () => {
+    try {
+      const response = await fetch("/api/messages", { method: "DELETE" });
+      if (!response.ok) {
+        throw new Error(`Failed to clear messages: ${response.status}`);
       }
-    ];
-    setMessages(welcomeMessages);
-    await saveState({
-      onboardingDone: true,
-      preferences: completePrefs,
-      spaces: initialSpacesBuilt,
-      items: starterItems,
-      messages: welcomeMessages
-    });
-
-    setActiveTab('智能面板');
-    triggerBannerNotification("🎉 筑巢测绘同步完成！欢迎来到松鼠家园！");
-  };
-
-  // Add Item to collection
-  const handleAddItem = async (newItemParams: Partial<Item>) => {
-    const draftItem: Item = {
-      id: newItemParams.id || 'item-' + Date.now(),
-      title: newItemParams.title || '无名小坚果',
-      spaceId: newItemParams.spaceId || 'kitchen',
-      spaceName: newItemParams.spaceName || '主厨房',
-      location: newItemParams.location || '桌角',
-      remainingPct: newItemParams.remainingPct ?? 100,
-      buyDate: newItemParams.buyDate || new Date().toISOString().split('T')[0],
-      expireDate: newItemParams.expireDate || '2026-12-31',
-      tag: newItemParams.tag || '充足',
-      count: newItemParams.count || 1,
-      unit: newItemParams.unit || '个',
-      icon: newItemParams.icon || 'package_2',
-      remark: newItemParams.remark || '手动登记入账。'
-    };
-
-    const freshItem = await createItem(draftItem).catch((error) => {
-      console.error(error);
-      triggerBannerNotification('后端写入失败，已临时保存在当前页面。');
-      return draftItem;
-    });
-    setItems((currentItems) => [
-      freshItem,
-      ...currentItems.filter((item) => item.id !== freshItem.id)
-    ]);
-
-    triggerBannerNotification(`📥 已将 1件【${freshItem.title}】归档到储藏洞【${freshItem.spaceName}】！`);
-  };
-
-  // Update specific item specs
-  const handleUpdateItem = async (id: string, updatedParams: Partial<Item>) => {
-    const before = items;
-    const updated = items.map((item) => {
-      if (item.id === id) {
-        return { ...item, ...updatedParams };
-      }
-      return item;
-    });
-    setItems(updated);
-    await updateItem(id, updatedParams).catch((error) => {
-      console.error(error);
-      setItems(before);
-      triggerBannerNotification('后端更新失败，已撤回本次修改。');
-    });
-  };
-
-  // Delete/discard item
-  const handleDeleteItem = async (id: string) => {
-    const itemToDelete = items.find(i => i.id === id);
-    const filtered = items.filter(item => item.id !== id);
-    setItems(filtered);
-    await deleteItem(id).catch((error) => {
-      console.error(error);
-      setItems(items);
-      triggerBannerNotification('后端删除失败，已恢复该物品。');
-    });
-
-    if (itemToDelete) {
-      triggerBannerNotification(`🧹 清空并清除了物品【${itemToDelete.title}】的库存。`);
+      const data = await response.json();
+      const nextMessages = Array.isArray(data.messages)
+        ? data.messages.map(normalizeMessage)
+        : [DEFAULT_CHAT_MESSAGE];
+      setMessages(nextMessages);
+    } catch (error) {
+      console.error("Failed to clear messages on server", error);
+      setMessages([DEFAULT_CHAT_MESSAGE]);
     }
   };
 
-  // Consume (reduce ratio)
-  const handleConsumeItem = async (id: string, deltaPct: number) => {
-    const updated = items.map((item) => {
-      if (item.id === id) {
-        const newPct = Math.max(0, item.remainingPct - deltaPct);
-        let tag: '告急' | '较低' | '充足' = '充足';
-        if (newPct < 20) tag = '告急';
-        else if (newPct < 50) tag = '较低';
-        return { ...item, remainingPct: newPct, tag };
-      }
-      return item;
-    });
-    setItems(updated);
-    const changed = updated.find((item) => item.id === id);
-    if (changed) {
-      await updateItem(id, { remainingPct: changed.remainingPct, tag: changed.tag }).catch((error) => {
-        console.error(error);
-        triggerBannerNotification('消耗状态还没同步到后端，请稍后重试。');
-      });
-    }
+  const handleResetFactoryData = () => {
+    localStorage.removeItem("squirrel_nest_settings");
+    localStorage.removeItem("squirrel_nest_inventory");
+    localStorage.removeItem("squirrel_nest_chat_hist");
+    setSettings(DEFAULT_SETTINGS);
+    setItems(DEFAULT_INVENTORY_ITEMS);
+    setMessages([DEFAULT_CHAT_MESSAGE]);
+    setActiveTab("dashboard");
   };
 
-  // Chat memory sending callback
-  const handleSendChatMessage = async (msg: Message) => {
-    const updatedMsgs = [...messages, msg];
-    setMessages(updatedMsgs);
-    await saveState({ messages: updatedMsgs }).catch(console.error);
+  const handleViewItem = (item: InventoryItem) => {
+    setSelectedDrawerItem(item);
+    setDrawerAction("view");
+    setIsDrawerOpen(true);
   };
 
-  // AI response logging callback
-  const handleReceiveAIResponse = async (text: string, cardData: any) => {
-    const aiId = 'ai-' + Date.now();
-    const aiMsg: Message = {
-      id: aiId,
-      sender: 'assistant',
-      text,
-      timestamp: '刚刚',
-      type: cardData ? 'action_card' : 'text',
-      actionCard: cardData ? {
-        title: cardData.title,
-        image: cardData.image || "https://lh3.googleusercontent.com/aida-public/AB6AXuAi0e0pMmh7n9_aGTW81tBycuiOEyAZPQx9amTGNI61Tv6lVT4Cy-EJ7aNh_Jk4aJV3gAJ9c2L6_pM2Rzalf78pA3hiaojD3WUXPGNsCVyMz0RmYHmDvBTj5IYh-9d9FDeB59eiXWLIcQEsNdWQuQqYNdEwJaHhPkIjRymaNmxfiAi0EE30ZVL_HWQS5-YbunGoYMbW_0qHo_2e-l32j1TUiNFhLAEBJmGWkk3iaJlEG3fPm8vwTzK9AOaV_BXT2YvPC4IbCfyP1g5i",
-        category: cardData.category,
-        quantity: cardData.quantity,
-        spaceName: cardData.spaceName
-      } : undefined
-    };
-
-    const updated = [...messages, aiMsg];
-    setMessages(updated);
-    await saveState({ messages: updated }).catch(console.error);
-    triggerBannerNotification("🐿️ 收到松鼠管家新传信呼应！");
+  const handleCreateNewItem = () => {
+    setSelectedDrawerItem(null);
+    setDrawerAction("create");
+    setIsDrawerOpen(true);
   };
 
-  // Save Preferences
-  const handleSavePreferences = async (updated: SystemPreferences) => {
-    setPreferences(updated);
-    await saveState({ preferences: updated }).catch(console.error);
-    triggerBannerNotification("⚙️ 系统阈值/AI设定偏好保存生效！");
-  };
-
-  // Absolute Wipe database
-  const handleResetAllData = async () => {
-    // Reset local component references
-    setOnboardingDoneState(false);
-    setItems(INITIAL_ITEMS);
-    setSpaces(INITIAL_SPACES);
-    setMessages(INITIAL_MESSAGES);
-    setPreferences(DEFAULT_PREFERENCES);
-    setActiveTab('智能面板');
-    await saveState({
-      onboardingDone: false,
-      items: INITIAL_ITEMS,
-      spaces: INITIAL_SPACES,
-      messages: INITIAL_MESSAGES,
-      preferences: DEFAULT_PREFERENCES
-    }).catch(console.error);
-  };
-
-  if (!isServerReady) {
-    return (
-      <div className="min-h-screen bg-background text-on-surface flex items-center justify-center font-black">
-        正在连接Squirrel后端...
-      </div>
-    );
+  if (!settings.onboardingComplete) {
+    return <Onboarding settings={settings} onSaveSettings={handleOnboardingComplete} />;
   }
 
-  // Onboarding View bypass if false
-  if (!onboardingDone) {
-    return (
-      <OnboardingView onComplete={handleOnboardingComplete} />
-    );
-  }
-
-  // Count severe warning notifications to display on persistent alert ticker
-  const urgentCount = items.filter(i => i.tag === '告急' || i.tag === '过期预警').length;
-  const recentExpiryTitle = items.find(i => i.tag === '告急' || i.tag === '过期预警')?.title || '面包等';
+  const navItems = [
+    { id: "dashboard", label: "仓储大盘", icon: LayoutDashboard },
+    { id: "inventory", label: "树洞聊斋", icon: Archive },
+    { id: "chat", label: "小窝存根", icon: MessageSquare },
+    { id: "settings", label: "控制阀阁", icon: SettingsIcon },
+  ];
 
   return (
-    <div className="min-h-screen bg-background text-on-surface font-sans flex flex-col relative pb-8">
-      
-      {/* Dynamic Slide Banner Notification */}
-      {notification && (
-        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50 bg-on-surface text-white px-6 py-3 rounded-full border-2 border-primary shadow-[4px_4px_0px_0px_#1b1c1c] text-xs font-black animate-bounce flex items-center gap-2">
-          <span>🐿️</span>
-          <span>{notification}</span>
+    <div className="min-h-screen bg-background bg-paper text-on-background font-sans flex flex-col md:flex-row">
+      <Drawer
+        isOpen={isDrawerOpen}
+        onClose={() => setIsDrawerOpen(false)}
+        action={drawerAction}
+        item={selectedDrawerItem}
+        locations={settings.selectedLocations}
+        onSave={(savedItem) => {
+          handleSaveItem(savedItem);
+          setIsDrawerOpen(false);
+        }}
+        onDelete={(id) => {
+          handleDeleteItem(id);
+          setIsDrawerOpen(false);
+        }}
+      />
+
+      <aside className="hidden md:flex w-64 shrink-0 flex-col justify-between border-r-4 border-on-background bg-white p-5">
+        <div className="space-y-6">
+          <div className="flex items-center gap-2">
+            <span className="text-4xl">🐿️</span>
+            <div>
+              <h1 className="font-display text-lg font-medium leading-none">松鼠筑巢</h1>
+              <p className="mt-1 text-[10px] uppercase tracking-wide text-outline">Smart Home Nest</p>
+            </div>
+          </div>
+
+          <nav className="space-y-2">
+            {navItems.map((tab) => {
+              const TabIcon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex w-full items-center gap-3 rounded-xl border-2 px-4 py-3 text-sm font-display font-bold transition-colors ${
+                    isActive
+                      ? "border-on-background bg-primary text-white shadow-[2px_3px_0_0_#1b1c1c]"
+                      : "border-transparent text-outline hover:bg-slate-100"
+                  }`}
+                >
+                  <TabIcon size={18} />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </nav>
         </div>
-      )}
 
-      {/* Persistent global alert ticker at very top */}
-      <div className="w-full bg-error text-white border-b-2 border-on-surface py-2.5 px-4 text-center text-xs font-extrabold flex items-center justify-center gap-2 select-none shadow-[0px_3px_0px_0px_#1b1c1c]">
-        <Bell className="w-4 h-4 animate-shake fill-current" />
-        <span>
-          {urgentCount > 0 
-            ? `今日松鼠播报：巢里有 ${urgentCount} 件食材物资告急中！${recentExpiryTitle} 已经快见底/过期临界区，请及时用闪电录入或点击厨房一键标记食用哦！`
-            : "今日松鼠播报：洞中囤藏物资满载很安定，筑巢小助手运行顺利！继续保持优秀整理习惯～"}
-        </span>
-      </div>
+        <div className="border-t pt-4 text-[10px] leading-relaxed text-outline">
+          <p>提醒时间: {settings.reminderTime}</p>
+          <p>生活标签: {settings.lifestyleTag}</p>
+        </div>
+      </aside>
 
-      {/* Main visual header wrapper */}
-      <header className="py-6 px-6 md:px-12 max-w-6xl w-full mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
-        
-        {/* Playful Brand Logo */}
+      <header className="sticky top-0 z-30 flex items-center justify-between border-b-2 border-on-background bg-white p-4 md:hidden">
         <div className="flex items-center gap-2">
-          <div className="bg-primary text-white p-2.5 rounded-2xl border-2 border-on-surface shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] rotate-[-1deg]">
-            <span className="text-3xl">🏡</span>
-          </div>
+          <span className="text-3xl">🐿️</span>
           <div>
-            <h1 className="text-2xl md:text-3xl font-headline-lg font-black text-on-surface leading-none flex items-center gap-1.5" id="app_title">
-              <span>Squirrel</span>
-              <span className="text-xs bg-secondary-container text-on-secondary-container px-2 py-0.5 rounded-full border border-on-surface">智能生活管家</span>
-            </h1>
-            <p className="text-[11px] text-on-surface-variant font-black tracking-wide mt-1">SQUIRREL'S NEST · ORGANIZED BEAUTIFULLY</p>
+            <h1 className="text-[15px] font-display font-medium leading-none">松鼠筑巢</h1>
+            <p className="text-[9px] text-outline">聊天与库存助手</p>
           </div>
         </div>
-
-        {/* Tab Navigator */}
-        <nav className="flex flex-wrap gap-2 md:gap-3 bg-white border-2 border-on-surface px-3 py-2 rounded-full shadow-[3px_3px_0px_0px_rgba(27,28,28,1)]" id="main_tabs">
-          {[
-            { id: '仓储大盘', icon: <Home className="w-4 h-4" /> },
-            { id: '树洞聊斋', icon: <MessageCircle className="w-4 h-4" /> },
-            { id: '小窝存根', icon: <Archive className="w-4 h-4" /> },
-            { id: '控制阀阁', icon: <Settings className="w-4 h-4" /> },
-          ].map((tab) => {
-            const isSelected = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-1.5 px-4 py-2 text-xs font-black rounded-full border-2 transition-all cursor-pointer ${
-                  isSelected 
-                    ? 'bg-primary text-white border-on-surface shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] scale-[1.01] -rotate-1' 
-                    : 'bg-transparent border-transparent hover:border-on-surface hover:bg-surface-container-low'
-                }`}
-                id={`tab-${tab.id}`}
-              >
-                {tab.icon}
-                <span>{tab.id}</span>
-              </button>
-            );
-          })}
-        </nav>
-
-        {/* Diagnostic reboarding shortcut button */}
-        <div className="hidden sm:block">
-          <button
-            onClick={() => {
-              if (confirm("想重新进入设置向导对生活习惯或物理仓库格数进行重新绘制吗？")) {
-                setOnboardingDoneState(false);
-              }
-            }}
-            className="text-[10px] bg-white text-on-surface-variant px-3 py-1.5 rounded-full border border-on-surface shadow-[1.5px_1.5px_0px_0px_#000] hover:translate-y-px font-black cursor-pointer"
-          >
-            ⚙️ 重新绘制空间
-          </button>
-        </div>
+        <button
+          onClick={() => setMobileMenuOpen((open) => !open)}
+          className="rounded-lg border-2 border-on-background bg-surface-container p-1.5"
+        >
+          {mobileMenuOpen ? <X size={18} /> : <Menu size={18} />}
+        </button>
       </header>
 
-      {/* Core Panel Content view */}
-      <main className={`flex-grow w-full mx-auto ${
-        activeTab === '松鼠助手'
-          ? 'max-w-[min(1200px,calc(100vw-1.5rem))] px-3 md:px-6'
-          : 'max-w-6xl px-6 md:px-12'
-      }`}>
-        
-        {activeTab === '智能面板' && (
-          <DashboardView 
-            items={items}
-            spaces={spaces}
-            preferences={preferences}
-            onNavigateToTab={(tab) => {
-              setActiveTab(tab);
-              // Trigger mini animation alert
-              triggerBannerNotification(`已切换到柜子「${tab}」档案视图`);
-            }}
-            onAddItem={handleAddItem}
-            onConsumeItem={handleConsumeItem}
-            onDiscardItem={handleDeleteItem}
-          />
+      <AnimatePresence>
+        {mobileMenuOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="absolute left-0 top-[64px] z-20 w-full space-y-2 border-b-4 border-on-background bg-white p-4 shadow-xl md:hidden"
+          >
+            {navItems.map((tab) => {
+              const TabIcon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    setActiveTab(tab.id);
+                    setMobileMenuOpen(false);
+                  }}
+                  className={`flex w-full items-center gap-3 rounded-xl border-2 px-4 py-3 text-sm font-display font-bold ${
+                    isActive
+                      ? "border-on-background bg-primary text-white shadow-[2px_3px_0_0_#1b1c1c]"
+                      : "border-transparent text-outline hover:bg-slate-100"
+                  }`}
+                >
+                  <TabIcon size={16} />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </motion.div>
         )}
+      </AnimatePresence>
 
-        {activeTab === '松鼠助手' && (
-          <AssistantView 
-            messages={messages}
-            items={items}
-            spaces={spaces}
-            onSendMessage={handleSendChatMessage}
-            onReceiveAIResponse={handleReceiveAIResponse}
-            onAddItem={handleAddItem}
-          />
-        )}
+      <main className="mx-auto w-full max-w-7xl flex-1 overflow-x-hidden p-4 md:p-6 lg:p-8">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.15 }}
+          >
+            {activeTab === "dashboard" && (
+              <DashboardTab
+                items={items}
+                settings={settings}
+                onNavigateToTab={setActiveTab}
+                onSetChatPreinput={setChatPreinput}
+                onQuickCleanItem={handleQuickCleanItem}
+                onViewItem={handleViewItem}
+              />
+            )}
 
-        {activeTab === '库存管理' && (
-          <InventoryView 
-            items={items}
-            spaces={spaces}
-            onUpdateItem={handleUpdateItem}
-            onDeleteItem={handleDeleteItem}
-            onAddItem={handleAddItem}
-          />
-        )}
+            {activeTab === "inventory" && (
+              <InventoryTab
+                items={items}
+                settings={settings}
+                onViewItem={handleViewItem}
+                onEditItem={(item) => {
+                  setSelectedDrawerItem(item);
+                  setDrawerAction("edit");
+                  setIsDrawerOpen(true);
+                }}
+                onDeleteItem={handleDeleteItem}
+                onCreateNewItem={handleCreateNewItem}
+              />
+            )}
 
-        {activeTab === '参数设定' && (
-          <SettingsView 
-            preferences={preferences}
-            onSavePreferences={handleSavePreferences}
-            onResetAllData={handleResetAllData}
-          />
-        )}
+            {activeTab === "chat" && (
+              <ChatTab
+                settings={settings}
+                items={items}
+                preinput={chatPreinput}
+                onClearPreinput={() => setChatPreinput("")}
+                onSaveNewItem={handleSaveItem}
+                onPostChatMessage={handleSetMessages}
+                onClearChatHistory={() => {
+                  void handleClearChatHistory();
+                }}
+                messages={messages}
+              />
+            )}
 
+            {activeTab === "settings" && (
+              <SettingsTab
+                settings={settings}
+                onUpdateSettings={saveSettingsToStorage}
+                onResetFactoryData={handleResetFactoryData}
+              />
+            )}
+          </motion.div>
+        </AnimatePresence>
       </main>
-
-      {/* Styled doodle footer banner */}
-      <footer className="mt-16 border-t-2 border-on-surface py-6 px-6 md:px-12 max-w-6xl w-full mx-auto flex flex-col sm:flex-row justify-between items-center text-xs text-on-surface-variant font-bold gap-4 select-none">
-        <div>🏡 Squirrel — 治愈感智能家居收纳理账管家</div>
-        <div className="flex gap-4">
-          <span className="flex items-center gap-1">💖 组织让生活更优雅</span>
-          <span>·</span>
-          <span>离线安全协议</span>
-        </div>
-      </footer>
-
     </div>
   );
 }

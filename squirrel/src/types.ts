@@ -1,55 +1,37 @@
-export interface Space {
+export type InventoryCategory = 'food' | 'medicine' | 'electronics' | 'cosmetics' | 'book' | 'other';
+
+export interface InventoryItem {
   id: string;
   name: string;
-  icon: string;
-  count: number;
-  warnCount: number;
-  bgClass: string;
-  textColor: string;
-  badgeColor: string;
-}
-
-export interface Item {
-  id: string;
-  title: string;
-  spaceId: string;
-  spaceName: string;
-  location: string;
-  remainingPct: number; // 0 - 100
-  buyDate: string;
-  expireDate: string;
-  tag: '告急' | '较低' | '充足' | '过期预警';
-  count: number;
+  category: InventoryCategory;
+  quantity: number;
   unit: string;
-  remark?: string;
-  icon: string;
+  location: string;
+  purchaseDate: string;
+  expiryDate?: string; // YYYY-MM-DD
+  remindDaysBefore: number;
+  tags: string[];
+  note: string;
 }
 
-export interface Message {
+export type SquirrelPersonality = 'humorous' | 'gabby' | 'gentle' | 'strict_squirrel';
+
+export interface AppSettings {
+  onboardingComplete: boolean;
+  selectedLocations: string[];
+  dietaryHabits: string[];
+  lifestyleTag: string;
+  reminderTime: string;
+  expirationStrategy: 'normal' | 'strict' | 'relaxed';
+  squirrelPersonality: SquirrelPersonality;
+}
+
+export interface ChatMessage {
   id: string;
   sender: 'user' | 'assistant';
   text: string;
   timestamp: string;
-  type: 'text' | 'voice' | 'action_card' | 'welcome';
-  voiceDuration?: string;
-  actionCard?: {
-    title: string;
-    image: string;
-    category: string;
-    quantity: number;
-    spaceName: string;
-    itemDetails?: any;
-  };
+  itemSuggestion?: Partial<InventoryItem>; // AI returned recognition suggestions
 }
 
-export interface SystemPreferences {
-  allergies: string[];
-  lifestyle: string;
-  warningThreshold: number; // e.g. 5
-  lowThreshold: number; // e.g. 15
-  reminderTime: string; // e.g. "18:00"
-  savingPath: string; // e.g. "~/Documents/SongShuZhuChao/Library"
-  aiModel: string; // e.g. "gemini-3.5-flash"
-  temperature: number; // e.g. 0.7
-  autoTag: boolean;
-}
+export type DrawerActionType = 'view' | 'edit' | 'create';
