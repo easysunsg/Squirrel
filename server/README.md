@@ -1,6 +1,6 @@
 # Squirrel Service
 
-Python/FastAPI service for 松鼠筑巢.
+Python/FastAPI service for Squirrel.
 
 ## Responsibilities
 

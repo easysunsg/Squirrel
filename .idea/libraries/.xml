@@ -1,7 +1,7 @@
 <component name="libraryTable">
-  <library name="松鼠筑巢">
+  <library name="squirrel">
     <CLASSES>
-      <root url="jar://$PROJECT_DIR$/松鼠筑巢.zip!/" />
+      <root url="jar://$PROJECT_DIR$/squirrel.zip!/" />
     </CLASSES>
     <JAVADOC />
     <SOURCES />

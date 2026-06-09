@@ -106,7 +106,7 @@ export default function OnboardingView({ onComplete }: OnboardingViewProps) {
       {/* Top Header Navigation for Onboarding branding */}
       <header className="flex justify-between items-center w-full mb-12 max-w-4xl mx-auto">
         <div className="bg-primary-container border-2 border-on-surface px-6 py-2 rounded-full rotate-[-1deg] shadow-[4px_4px_0px_0px_rgba(27,28,28,1)] flex items-center gap-2">
-          <span className="font-headline-lg text-headline-lg font-black text-on-primary-container text-2xl" id="onboarding_brand">松鼠筑巢</span>
+          <span className="font-headline-lg text-headline-lg font-black text-on-primary-container text-2xl" id="onboarding_brand">Squirrel</span>
           <span className="bg-white/20 p-1 rounded-full text-white text-xs">🐿️ 筑巢策略</span>
         </div>
         <div className="hidden md:flex gap-4">
@@ -411,7 +411,7 @@ export default function OnboardingView({ onComplete }: OnboardingViewProps) {
 
       {/* Styled Footer for Onboarding info */}
       <footer className="w-full py-4 mt-8 flex justify-between items-center border-t-2 border-on-surface max-w-4xl mx-auto text-xs text-on-surface-variant font-semibold">
-        <div>松鼠筑巢 - 玩转整理</div>
+        <div>Squirrel - 玩转整理</div>
         <div className="flex gap-4">
           <span>隐私政策</span>
           <span>使用条款</span>

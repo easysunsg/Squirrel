@@ -379,7 +379,7 @@ export default function DashboardView({
       {showRecipeModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white border-2 border-on-surface rounded-2xl p-6 max-w-lg w-full shadow-[6px_6px_0px_0px_#1b1c1c] relative animate-in zoom-in-95 duration-100">
-            <h2 className="text-xl font-bold text-primary mb-2">🍳 松鼠筑巢推荐烹饪纸草：{recipe.title}</h2>
+            <h2 className="text-xl font-bold text-primary mb-2">🍳 Squirrel推荐烹饪纸草：{recipe.title}</h2>
             <div className="text-xs text-on-surface-variant mb-4 pb-2 border-b border-on-surface">
               {recipe.description}
             </div>

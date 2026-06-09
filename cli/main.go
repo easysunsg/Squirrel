@@ -81,7 +81,7 @@ func renderItems(items []Item) {
 func main() {
 	root := &cobra.Command{
 		Use:   "squirrel",
-		Short: "松鼠筑巢 CLI",
+		Short: "Squirrel CLI",
 	}
 	root.PersistentFlags().StringVar(&baseURL, "api", "", "Squirrel service URL")
 

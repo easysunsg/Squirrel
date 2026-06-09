@@ -109,7 +109,7 @@ export default function App() {
       {
         id: 'msg-start',
         sender: 'assistant',
-        text: `哈喽！恭喜开启松鼠筑巢，我们已成功测绘了您的 ${selectedSpaces.join('、')} 物理生活空间！🐿️有什么录入的新采购或清理，随时吩咐小松鼠哦～`,
+        text: `哈喽！恭喜开启Squirrel，我们已成功测绘了您的 ${selectedSpaces.join('、')} 物理生活空间！🐿️有什么录入的新采购或清理，随时吩咐小松鼠哦～`,
         timestamp: '刚刚',
         type: 'welcome'
       }
@@ -270,7 +270,7 @@ export default function App() {
   if (!isServerReady) {
     return (
       <div className="min-h-screen bg-background text-on-surface flex items-center justify-center font-black">
-        正在连接松鼠筑巢后端...
+        正在连接Squirrel后端...
       </div>
     );
   }
@@ -317,7 +317,7 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-2xl md:text-3xl font-headline-lg font-black text-on-surface leading-none flex items-center gap-1.5" id="app_title">
-              <span>松鼠筑巢</span>
+              <span>Squirrel</span>
               <span className="text-xs bg-secondary-container text-on-secondary-container px-2 py-0.5 rounded-full border border-on-surface">智能生活管家</span>
             </h1>
             <p className="text-[11px] text-on-surface-variant font-black tracking-wide mt-1">SQUIRREL'S NEST · ORGANIZED BEAUTIFULLY</p>
@@ -422,7 +422,7 @@ export default function App() {
 
       {/* Styled doodle footer banner */}
       <footer className="mt-16 border-t-2 border-on-surface py-6 px-6 md:px-12 max-w-6xl w-full mx-auto flex flex-col sm:flex-row justify-between items-center text-xs text-on-surface-variant font-bold gap-4 select-none">
-        <div>🏡 松鼠筑巢 — 治愈感智能家居收纳理账管家</div>
+        <div>🏡 Squirrel — 治愈感智能家居收纳理账管家</div>
         <div className="flex gap-4">
           <span className="flex items-center gap-1">💖 组织让生活更优雅</span>
           <span>·</span>

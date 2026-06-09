@@ -353,7 +353,7 @@ export default function InventoryView({
             <div className="space-y-3">
               <button
                 onClick={() => {
-                  alert(`已记入松鼠筑巢电子备忘清单！在下次汇总时小松鼠会通知您购买：${activeDetailItem.title} 🛒`);
+                  alert(`已记入Squirrel电子备忘清单！在下次汇总时小松鼠会通知您购买：${activeDetailItem.title} 🛒`);
                   setActiveDetailItem(null);
                 }}
                 className="w-full py-3 bg-secondary text-white rounded-xl font-bold text-xs border-2 border-on-surface flex items-center justify-center gap-2 shadow-[2px_2px_0px_0px_rgba(27,28,28,1)] hover:translate-y-px duration-75 cursor-pointer"

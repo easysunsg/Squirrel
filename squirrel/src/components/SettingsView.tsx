@@ -69,7 +69,7 @@ export default function SettingsView({
           </span>
           <div>
             <h2 className="text-xl md:text-2xl font-headline-lg font-black text-on-surface">系统参数设定</h2>
-            <p className="text-xs text-on-surface-variant font-bold">微调松鼠筑巢的各项预警以及AI智能引擎机制。</p>
+            <p className="text-xs text-on-surface-variant font-bold">微调Squirrel的各项预警以及AI智能引擎机制。</p>
           </div>
         </div>
 
@@ -237,7 +237,7 @@ export default function SettingsView({
             referrerPolicy="no-referrer"
           />
           <h4 className="font-extrabold text-sm text-on-surface">“组织即艺术”</h4>
-          <span className="text-[10px] text-on-surface-variant font-mono font-bold block mt-1">—— 松鼠筑巢美学守则一期</span>
+          <span className="text-[10px] text-on-surface-variant font-mono font-bold block mt-1">—— Squirrel美学守则一期</span>
         </section>
 
         {/* Restore card block */}

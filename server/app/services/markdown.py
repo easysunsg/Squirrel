@@ -12,7 +12,7 @@ def item_status(item: Item) -> str:
 
 def render_inventory_markdown(state: AppState) -> str:
     lines = [
-        "# 松鼠筑巢库存报告",
+        "# Squirrel库存报告",
         "",
         "| 物品 | 数量 | 状态 | 空间 | 位置 | 剩余 | 到期 | 备注 |",
         "| --- | ---: | --- | --- | --- | ---: | --- | --- |",
