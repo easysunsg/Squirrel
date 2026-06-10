@@ -38,6 +38,7 @@ export interface ChatApiResponse {
   reply?: string;
   itemSuggestion?: Partial<InventoryItem>;
   messages?: ChatMessage[];
+  items?: unknown[];
 }
 
 export type DrawerActionType = 'view' | 'edit' | 'create';

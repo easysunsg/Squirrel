@@ -34,26 +34,6 @@ async function proxyJson(req: Request, res: Response, targetPath: string) {
   }
 }
 
-app.get("/api/health", async (req, res) => {
-  await proxyJson(req, res, "/api/health");
-});
-
-app.get("/api/messages", async (req, res) => {
-  await proxyJson(req, res, "/api/messages");
-});
-
-app.put("/api/messages", async (req, res) => {
-  await proxyJson(req, res, "/api/messages");
-});
-
-app.delete("/api/messages", async (req, res) => {
-  await proxyJson(req, res, "/api/messages");
-});
-
-app.post("/api/chat", async (req, res) => {
-  await proxyJson(req, res, "/api/chat");
-});
-
 app.post("/api/recognize-item", async (req, res) => {
   const locations = Array.isArray(req.body?.locations) ? req.body.locations : [];
   const pool = [
@@ -75,6 +55,10 @@ app.post("/api/recognize-item", async (req, res) => {
     },
     message: "已经识别出一件物品，并生成了一份可直接入库的建议。",
   });
+});
+
+app.all("/api/*", async (req, res) => {
+  await proxyJson(req, res, req.originalUrl);
 });
 
 async function main() {

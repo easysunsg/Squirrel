@@ -14,7 +14,7 @@ import { Drawer } from "./components/Drawer";
 import { InventoryTab } from "./components/InventoryTab";
 import { Onboarding } from "./components/Onboarding";
 import { SettingsTab } from "./components/SettingsTab";
-import { AppSettings, ChatApiResponse, ChatMessage, DrawerActionType, InventoryItem } from "./types";
+import { AppSettings, ChatApiResponse, ChatMessage, DrawerActionType, InventoryCategory, InventoryItem } from "./types";
 import { DEFAULT_INVENTORY_ITEMS } from "./utils";
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -33,6 +33,139 @@ const DEFAULT_CHAT_MESSAGE: ChatMessage = {
   text: "欢迎来到松鼠树洞，我们可以开始记录库存、整理物品，或者直接聊天。",
   timestamp: "刚刚",
 };
+
+type ServerInventoryItem = {
+  id?: string | null;
+  title?: string;
+  category?: InventoryCategory;
+  spaceId?: string;
+  spaceName?: string;
+  location?: string;
+  remainingPct?: number;
+  buyDate?: string | null;
+  expireDate?: string | null;
+  tag?: string | null;
+  count?: number;
+  unit?: string;
+  remindDaysBefore?: number;
+  tags?: string[];
+  remark?: string | null;
+  icon?: string;
+};
+
+type ServerStatePayload = {
+  onboardingDone?: boolean;
+  spaces?: Array<{ name?: string }>;
+  items?: ServerInventoryItem[];
+  preferences?: {
+    allergies?: string[];
+    lifestyle?: string;
+    reminderTime?: string;
+    selectedLocations?: string[];
+    expirationStrategy?: AppSettings["expirationStrategy"];
+    squirrelPersonality?: AppSettings["squirrelPersonality"];
+  };
+};
+
+function normalizeSettingsFromServer(payload: ServerStatePayload): AppSettings {
+  const selectedLocations = payload.preferences?.selectedLocations?.filter(Boolean)
+    || payload.spaces?.map((space) => space.name).filter((name): name is string => Boolean(name && name.trim()))
+    || DEFAULT_SETTINGS.selectedLocations;
+
+  return {
+    onboardingComplete: payload.onboardingDone ?? DEFAULT_SETTINGS.onboardingComplete,
+    selectedLocations,
+    dietaryHabits: payload.preferences?.allergies ?? DEFAULT_SETTINGS.dietaryHabits,
+    lifestyleTag: payload.preferences?.lifestyle ?? DEFAULT_SETTINGS.lifestyleTag,
+    reminderTime: payload.preferences?.reminderTime ?? DEFAULT_SETTINGS.reminderTime,
+    expirationStrategy: payload.preferences?.expirationStrategy ?? DEFAULT_SETTINGS.expirationStrategy,
+    squirrelPersonality: payload.preferences?.squirrelPersonality ?? DEFAULT_SETTINGS.squirrelPersonality,
+  };
+}
+
+function buildServerStateFromSettings(nextSettings: AppSettings) {
+  const locationSpaceStyles = [
+    { icon: "kitchen", bgClass: "bg-primary-fixed", textColor: "text-primary", badgeColor: "bg-secondary-container" },
+    { icon: "shelves", bgClass: "bg-tertiary-fixed", textColor: "text-tertiary", badgeColor: "bg-surface-container-high" },
+    { icon: "garage", bgClass: "bg-secondary-fixed", textColor: "text-secondary", badgeColor: "bg-surface-container-high" },
+    { icon: "home_storage", bgClass: "bg-surface-container-high", textColor: "text-outline", badgeColor: "bg-surface-container" },
+  ] as const;
+
+  const warningThresholdMap = {
+    strict: 10,
+    normal: 5,
+    relaxed: 2,
+  } as const;
+
+  return {
+    onboardingDone: nextSettings.onboardingComplete,
+    spaces: nextSettings.selectedLocations.map((name, index) => ({
+      id: `space-${index + 1}`,
+      name,
+      ...locationSpaceStyles[index % locationSpaceStyles.length],
+    })),
+    preferences: {
+      allergies: nextSettings.dietaryHabits,
+      lifestyle: nextSettings.lifestyleTag,
+      warningThreshold: warningThresholdMap[nextSettings.expirationStrategy],
+      lowThreshold: 15,
+      reminderTime: nextSettings.reminderTime,
+      savingPath: "./storage/inventory.md",
+      aiModel: "gpt-4o-mini",
+      temperature: 0.7,
+      autoTag: true,
+      selectedLocations: nextSettings.selectedLocations,
+      expirationStrategy: nextSettings.expirationStrategy,
+      squirrelPersonality: nextSettings.squirrelPersonality,
+    },
+  };
+}
+
+function normalizeServerItem(item: ServerInventoryItem, index: number): InventoryItem {
+  return {
+    id: item.id || `item-server-${index}`,
+    name: item.title || "无名物品",
+    category: item.category || "other",
+    quantity: item.count ?? 1,
+    unit: item.unit || "个",
+    location: item.location || item.spaceName || "默认层架",
+    purchaseDate: item.buyDate || new Date().toISOString().split("T")[0],
+    expiryDate: item.expireDate || undefined,
+    remindDaysBefore: item.remindDaysBefore ?? 5,
+    tags: item.tags || [],
+    note: item.remark || "",
+  };
+}
+
+function normalizeServerItems(value: unknown): InventoryItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item, index) => normalizeServerItem(item as ServerInventoryItem, index));
+}
+
+function buildServerItemFromInventory(item: InventoryItem, settings: AppSettings): ServerInventoryItem {
+  const spaceIndex = settings.selectedLocations.indexOf(item.location);
+  const spaceId = spaceIndex >= 0 ? `space-${spaceIndex + 1}` : "space-custom";
+
+  return {
+    id: item.id,
+    title: item.name,
+    category: item.category,
+    spaceId,
+    spaceName: item.location,
+    location: item.location,
+    remainingPct: 100,
+    buyDate: item.purchaseDate,
+    expireDate: item.expiryDate || null,
+    count: item.quantity,
+    unit: item.unit,
+    remindDaysBefore: item.remindDaysBefore,
+    tags: item.tags,
+    remark: item.note,
+  };
+}
 
 function normalizeMessage(message: Partial<ChatMessage>, index: number): ChatMessage {
   return {
@@ -85,27 +218,47 @@ export default function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
-    const savedConfig = localStorage.getItem("squirrel_nest_settings");
-    if (savedConfig) {
+    const loadInitialState = async () => {
       try {
-        setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(savedConfig) });
-      } catch (error) {
-        console.error("Failed to read settings from localStorage", error);
-      }
-    }
+        const response = await fetch("/api/state");
+        if (!response.ok) {
+          throw new Error(`Failed to load state: ${response.status}`);
+        }
 
-    const savedItems = localStorage.getItem("squirrel_nest_inventory");
-    if (savedItems) {
-      try {
-        setItems(JSON.parse(savedItems));
+        const data = (await response.json()) as ServerStatePayload;
+        const serverSettings = normalizeSettingsFromServer(data);
+        const serverItems = normalizeServerItems(data.items);
+        setSettings(serverSettings);
+        setItems(serverItems);
+        localStorage.setItem("squirrel_nest_settings", JSON.stringify(serverSettings));
+        localStorage.setItem("squirrel_nest_inventory", JSON.stringify(serverItems));
       } catch (error) {
-        console.error("Failed to read inventory from localStorage", error);
-        setItems(DEFAULT_INVENTORY_ITEMS);
+        console.error("Failed to load state from server", error);
+        const savedConfig = localStorage.getItem("squirrel_nest_settings");
+        if (savedConfig) {
+          try {
+            setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(savedConfig) });
+          } catch (parseError) {
+            console.error("Failed to read settings from localStorage", parseError);
+          }
+        }
+
+        const savedItems = localStorage.getItem("squirrel_nest_inventory");
+        if (savedItems) {
+          try {
+            setItems(JSON.parse(savedItems));
+          } catch (parseError) {
+            console.error("Failed to read inventory from localStorage", parseError);
+            setItems(DEFAULT_INVENTORY_ITEMS);
+          }
+        } else {
+          setItems(DEFAULT_INVENTORY_ITEMS);
+          localStorage.setItem("squirrel_nest_inventory", JSON.stringify(DEFAULT_INVENTORY_ITEMS));
+        }
       }
-    } else {
-      setItems(DEFAULT_INVENTORY_ITEMS);
-      localStorage.setItem("squirrel_nest_inventory", JSON.stringify(DEFAULT_INVENTORY_ITEMS));
-    }
+    };
+
+    void loadInitialState();
 
     const loadMessages = async () => {
       try {
@@ -142,30 +295,63 @@ export default function App() {
     localStorage.setItem("squirrel_nest_settings", JSON.stringify(nextSettings));
   };
 
+  const persistSettings = async (nextSettings: AppSettings) => {
+    const response = await fetch("/api/state", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(buildServerStateFromSettings(nextSettings)),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to save settings: ${response.status}`);
+    }
+
+    saveSettingsToStorage(nextSettings);
+  };
+
   const saveItemsToStorage = (nextItems: InventoryItem[]) => {
     setItems(nextItems);
     localStorage.setItem("squirrel_nest_inventory", JSON.stringify(nextItems));
   };
 
-  const handleOnboardingComplete = (nextSettings: AppSettings) => {
-    saveSettingsToStorage(nextSettings);
+  const handleOnboardingComplete = async (nextSettings: AppSettings) => {
+    await persistSettings(nextSettings);
     setActiveTab("dashboard");
   };
 
-  const handleSaveItem = (itemToSave: InventoryItem) => {
+  const handleSaveItem = async (itemToSave: InventoryItem) => {
     const exists = items.some((item) => item.id === itemToSave.id);
+    const response = await fetch(exists ? `/api/items/${itemToSave.id}` : "/api/items", {
+      method: exists ? "PATCH" : "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(buildServerItemFromInventory(itemToSave, settings)),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to save item: ${response.status}`);
+    }
+
+    const savedItem = normalizeServerItem((await response.json()) as ServerInventoryItem, 0);
     const nextItems = exists
-      ? items.map((item) => (item.id === itemToSave.id ? itemToSave : item))
-      : [itemToSave, ...items];
+      ? items.map((item) => (item.id === savedItem.id ? savedItem : item))
+      : [savedItem, ...items];
     saveItemsToStorage(nextItems);
   };
 
-  const handleDeleteItem = (id: string) => {
+  const handleDeleteItem = async (id: string) => {
+    const response = await fetch(`/api/items/${id}`, { method: "DELETE" });
+    if (!response.ok) {
+      throw new Error(`Failed to delete item: ${response.status}`);
+    }
     saveItemsToStorage(items.filter((item) => item.id !== id));
   };
 
-  const handleQuickCleanItem = (id: string) => {
-    saveItemsToStorage(items.filter((item) => item.id !== id));
+  const handleQuickCleanItem = async (id: string) => {
+    await handleDeleteItem(id);
   };
 
   const appendChatMessage = (message: ChatMessage) => {
@@ -199,6 +385,11 @@ export default function App() {
       }
 
       const data = (await response.json()) as ChatApiResponse;
+      if (Array.isArray(data.items)) {
+        const serverItems = normalizeServerItems(data.items);
+        saveItemsToStorage(serverItems);
+      }
+
       if (Array.isArray(data.messages)) {
         setMessages(normalizeMessageList(data.messages));
         return;
@@ -265,7 +456,7 @@ export default function App() {
     { id: "dashboard", label: "仓储大盘", icon: LayoutDashboard },
     { id: "inventory", label: "小窝存根", icon: Archive },
     { id: "chat", label: "树洞聊斋", icon: MessageSquare },
-    { id: "settings", label: "控制阀阁", icon: SettingsIcon },
+    { id: "settings", label: "控制台", icon: SettingsIcon },
   ];
 
   return (
@@ -276,14 +467,8 @@ export default function App() {
         action={drawerAction}
         item={selectedDrawerItem}
         locations={settings.selectedLocations}
-        onSave={(savedItem) => {
-          handleSaveItem(savedItem);
-          setIsDrawerOpen(false);
-        }}
-        onDelete={(id) => {
-          handleDeleteItem(id);
-          setIsDrawerOpen(false);
-        }}
+        onSave={handleSaveItem}
+        onDelete={handleDeleteItem}
       />
 
       <aside className="hidden md:flex w-64 shrink-0 flex-col justify-between border-r-4 border-on-background bg-white p-5">
@@ -429,7 +614,7 @@ export default function App() {
             {activeTab === "settings" && (
               <SettingsTab
                 settings={settings}
-                onUpdateSettings={saveSettingsToStorage}
+                onUpdateSettings={persistSettings}
                 onResetFactoryData={handleResetFactoryData}
               />
             )}

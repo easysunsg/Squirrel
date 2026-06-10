@@ -124,6 +124,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS items (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'other',
                 space_id TEXT NOT NULL,
                 space_name TEXT NOT NULL,
                 location TEXT NOT NULL,
@@ -133,6 +134,8 @@ def init_db() -> None:
                 tag TEXT NOT NULL,
                 count INTEGER NOT NULL,
                 unit TEXT NOT NULL,
+                remind_days_before INTEGER NOT NULL DEFAULT 5,
+                tags TEXT,
                 remark TEXT,
                 icon TEXT NOT NULL,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -162,6 +165,14 @@ def init_db() -> None:
             """
         )
 
+        item_columns = {row["name"] for row in conn.execute("PRAGMA table_info(items)").fetchall()}
+        if "category" not in item_columns:
+            conn.execute("ALTER TABLE items ADD COLUMN category TEXT NOT NULL DEFAULT 'other'")
+        if "remind_days_before" not in item_columns:
+            conn.execute("ALTER TABLE items ADD COLUMN remind_days_before INTEGER NOT NULL DEFAULT 5")
+        if "tags" not in item_columns:
+            conn.execute("ALTER TABLE items ADD COLUMN tags TEXT")
+
         message_columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
         if "item_suggestion" not in message_columns:
             conn.execute("ALTER TABLE messages ADD COLUMN item_suggestion TEXT")
@@ -182,7 +193,7 @@ def normalize_item(item: Item) -> Item:
     data = item.model_copy(deep=True)
     data.id = data.id or f"item-{uuid4().hex[:12]}"
     data.buyDate = data.buyDate or today_iso()
-    data.expireDate = data.expireDate or days_from_now(30)
+    data.expireDate = data.expireDate or ""
     if not data.tag:
         data.tag = "告急" if data.remainingPct < 20 else "较低" if data.remainingPct < 50 else "充足"
     if not data.spaceId:
@@ -199,6 +210,7 @@ def row_to_item(row: sqlite3.Row) -> Item:
     return Item(
         id=row["id"],
         title=row["title"],
+        category=row["category"],
         spaceId=row["space_id"],
         spaceName=row["space_name"],
         location=row["location"],
@@ -208,6 +220,8 @@ def row_to_item(row: sqlite3.Row) -> Item:
         tag=row["tag"],
         count=row["count"],
         unit=row["unit"],
+        remindDaysBefore=row["remind_days_before"],
+        tags=json.loads(row["tags"]) if row["tags"] else [],
         remark=row["remark"],
         icon=row["icon"],
     )
@@ -223,12 +237,13 @@ def upsert_item(conn: sqlite3.Connection, item: Item) -> Item:
     conn.execute(
         """
         INSERT INTO items(
-            id, title, space_id, space_name, location, remaining_pct,
-            buy_date, expire_date, tag, count, unit, remark, icon
+            id, title, category, space_id, space_name, location, remaining_pct,
+            buy_date, expire_date, tag, count, unit, remind_days_before, tags, remark, icon
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             title=excluded.title,
+            category=excluded.category,
             space_id=excluded.space_id,
             space_name=excluded.space_name,
             location=excluded.location,
@@ -238,6 +253,8 @@ def upsert_item(conn: sqlite3.Connection, item: Item) -> Item:
             tag=excluded.tag,
             count=excluded.count,
             unit=excluded.unit,
+            remind_days_before=excluded.remind_days_before,
+            tags=excluded.tags,
             remark=excluded.remark,
             icon=excluded.icon,
             updated_at=CURRENT_TIMESTAMP
@@ -245,6 +262,7 @@ def upsert_item(conn: sqlite3.Connection, item: Item) -> Item:
         (
             item.id,
             item.title,
+            item.category,
             item.spaceId,
             item.spaceName,
             item.location,
@@ -254,6 +272,8 @@ def upsert_item(conn: sqlite3.Connection, item: Item) -> Item:
             item.tag,
             item.count,
             item.unit,
+            item.remindDaysBefore,
+            json.dumps(item.tags, ensure_ascii=False),
             item.remark,
             item.icon,
         ),

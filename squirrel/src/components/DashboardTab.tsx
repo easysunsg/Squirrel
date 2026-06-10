@@ -12,7 +12,7 @@ interface DashboardProps {
   settings: AppSettings;
   onNavigateToTab: (tab: string) => void;
   onSetChatPreinput: (input: string) => void;
-  onQuickCleanItem: (id: string) => void;
+  onQuickCleanItem: (id: string) => Promise<void> | void;
   onViewItem: (item: InventoryItem) => void;
 }
 
@@ -230,7 +230,10 @@ export const DashboardTab: React.FC<DashboardProps> = ({
                       <button
                         onClick={() => {
                           if (confirm(`吱！您确定已经吃完或清理了【${item.name}】，并从清单中删除吗？`)) {
-                            onQuickCleanItem(item.id);
+                            void Promise.resolve(onQuickCleanItem(item.id)).catch((error) => {
+                              console.error("Failed to quick clean item", error);
+                              alert("清理失败，请确认后端服务已启动后重试。");
+                            });
                           }
                         }}
                         className="px-2 py-1 bg-[#ffd5d1] hover:bg-[#ffe9e6] border-2 border-on-background text-[10px] text-error font-bold rounded-full cursor-pointer"

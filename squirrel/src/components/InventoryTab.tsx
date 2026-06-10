@@ -11,7 +11,7 @@ interface InventoryProps {
   settings: AppSettings;
   onViewItem: (item: InventoryItem) => void;
   onEditItem: (item: InventoryItem) => void;
-  onDeleteItem: (id: string) => void;
+  onDeleteItem: (id: string) => Promise<void> | void;
   onCreateNewItem: () => void;
 }
 

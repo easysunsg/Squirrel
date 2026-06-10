@@ -12,17 +12,27 @@ import {
   BellRing,
   UserCheck,
   Flame,
-  Bell,
-  Clock3,
-  CheckCircle2,
-  Circle,
   Sprout,
 } from "lucide-react";
+import { ReminderSettingsPanel, LIFESTYLE_OPTIONS } from "./ReminderSettingsPanel";
 
 interface OnboardingProps {
   settings: AppSettings;
-  onSaveSettings: (settings: AppSettings) => void;
+  onSaveSettings: (settings: AppSettings) => Promise<void> | void;
 }
+
+const strategyReminderDays = {
+  strict: 10,
+  normal: 5,
+  relaxed: 2,
+};
+
+const locationSpaceStyles = [
+  { icon: "kitchen", bgClass: "bg-primary-fixed", textColor: "text-primary", badgeColor: "bg-secondary-container" },
+  { icon: "shelves", bgClass: "bg-tertiary-fixed", textColor: "text-tertiary", badgeColor: "bg-surface-container-high" },
+  { icon: "garage", bgClass: "bg-secondary-fixed", textColor: "text-secondary", badgeColor: "bg-surface-container-high" },
+  { icon: "home_storage", bgClass: "bg-surface-container-high", textColor: "text-outline", badgeColor: "bg-surface-container" },
+];
 
 const defaultLocations = ["主冰箱", "厨房储物柜", "玄关柜"];
 
@@ -46,13 +56,7 @@ const presetHabits = [
   "定期清理强迫症",
 ];
 
-const lifestyleOptions = [
-  "减脂增肌中",
-  "佛系干饭人",
-  "精致生活家",
-];
-
-const reminderPresets = ["07:30", "12:00", "18:00", "21:00"];
+const lifestyleOptions = LIFESTYLE_OPTIONS;
 
 export const Onboarding: React.FC<OnboardingProps> = ({ settings, onSaveSettings }) => {
   const [step, setStep] = useState(1);
@@ -72,6 +76,8 @@ export const Onboarding: React.FC<OnboardingProps> = ({ settings, onSaveSettings
   const [personality, setPersonality] = useState<SquirrelPersonality>(
     settings.squirrelPersonality
   );
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const progressWidth = useMemo(() => `${(step / 4) * 100}%`, [step]);
 
@@ -93,13 +99,14 @@ export const Onboarding: React.FC<OnboardingProps> = ({ settings, onSaveSettings
     setSelectedHabits([...selectedHabits, name]);
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (step < 4) {
       setStep(step + 1);
+      setSaveError(null);
       return;
     }
 
-    onSaveSettings({
+    const nextSettings: AppSettings = {
       onboardingComplete: true,
       selectedLocations: selectedLocs,
       dietaryHabits: selectedHabits,
@@ -107,7 +114,19 @@ export const Onboarding: React.FC<OnboardingProps> = ({ settings, onSaveSettings
       reminderTime,
       expirationStrategy: strategy,
       squirrelPersonality: personality,
-    });
+    };
+
+    setIsSaving(true);
+    setSaveError(null);
+
+    try {
+      await onSaveSettings(nextSettings);
+    } catch (error) {
+      console.error("Failed to save onboarding settings", error);
+      setSaveError("设置保存失败，请确认后端服务已启动后重试。");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handlePrev = () => {
@@ -270,82 +289,13 @@ export const Onboarding: React.FC<OnboardingProps> = ({ settings, onSaveSettings
                 </p>
               </div>
 
-              <div className="grid gap-5 md:grid-cols-2">
-                <section className="bg-white border-2 border-on-background rounded-[28px] shadow-[6px_8px_0_0_#1b1c1c] p-5 space-y-4">
-                  <div className="flex items-center gap-2">
-                    <Sprout className="text-secondary" size={20} />
-                    <h3 className="font-display text-2xl font-bold text-on-background">生活标签</h3>
-                  </div>
-
-                  <div className="space-y-3">
-                    {lifestyleOptions.map((option) => {
-                      const isSelected = lifestyleTag === option;
-                      return (
-                        <button
-                          key={option}
-                          onClick={() => setLifestyleTag(option)}
-                          className={`w-full flex items-center gap-3 rounded-full border-2 border-on-background px-4 py-3 text-left transition-all active-press ${
-                            isSelected ? "bg-surface-container hard-shadow-sm -translate-y-0.5" : "bg-white"
-                          }`}
-                        >
-                          {isSelected ? (
-                            <CheckCircle2 size={18} className="text-secondary shrink-0" />
-                          ) : (
-                            <Circle size={18} className="text-secondary shrink-0" />
-                          )}
-                          <span className="font-medium text-on-background">{option}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </section>
-
-                <section className="bg-white border-2 border-on-background rounded-[28px] shadow-[6px_8px_0_0_#1b1c1c] p-5 space-y-4">
-                  <div className="flex items-center gap-2">
-                    <Bell className="text-tertiary" size={20} />
-                    <h3 className="font-display text-2xl font-bold text-on-background">提醒时间</h3>
-                  </div>
-
-                  <div className="rounded-[28px] border-2 border-on-background bg-[#ffe92e] px-5 py-6 text-center shadow-[2px_3px_0_0_#1b1c1c]">
-                    <p className="text-xs font-bold text-[#665800]">每日固定提醒</p>
-                    <p className="mt-2 text-2xl md:text-3xl font-display font-extrabold text-on-background">
-                      每天 {reminderTime}
-                    </p>
-                    <p className="mt-2 text-xs text-[#665800]">
-                      松鼠管家会按这个时间帮你检查临期库存
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    {reminderPresets.map((time) => {
-                      const isSelected = reminderTime === time;
-                      return (
-                        <button
-                          key={time}
-                          onClick={() => setReminderTime(time)}
-                          className={`rounded-full border-2 border-on-background px-3 py-2 text-sm font-medium active-press-sm ${
-                            isSelected ? "bg-tertiary-fixed text-on-background hard-shadow-sm" : "bg-white"
-                          }`}
-                        >
-                          {time}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <label className="block space-y-2">
-                    <span className="text-xs font-bold text-outline flex items-center gap-1">
-                      <Clock3 size={14} /> 修改提醒时间
-                    </span>
-                    <input
-                      type="time"
-                      value={reminderTime}
-                      onChange={(e) => setReminderTime(e.target.value)}
-                      className="w-full rounded-full border-2 border-on-background bg-white px-4 py-3 text-sm font-medium outline-none focus:bg-surface"
-                    />
-                  </label>
-                </section>
-              </div>
+              <ReminderSettingsPanel
+                lifestyleTag={lifestyleTag}
+                reminderTime={reminderTime}
+                onLifestyleTagChange={setLifestyleTag}
+                onReminderTimeChange={setReminderTime}
+                variant="onboarding"
+              />
             </motion.div>
           )}
 
@@ -446,12 +396,19 @@ export const Onboarding: React.FC<OnboardingProps> = ({ settings, onSaveSettings
 
           <button
             onClick={handleNext}
-            className="flex items-center gap-1 px-6 py-2.5 text-sm font-display font-medium border-2 border-on-background bg-primary text-white hover:bg-opacity-95 rounded-xl hard-shadow-sm active-press cursor-pointer"
+            disabled={isSaving}
+            className="flex items-center gap-1 px-6 py-2.5 text-sm font-display font-medium border-2 border-on-background bg-primary text-white hover:bg-opacity-95 rounded-xl hard-shadow-sm active-press cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 disabled:translate-x-0 disabled:translate-y-0"
           >
-            {step === 4 ? "完成设置，进入松鼠筑巢" : "下一步"}
+            {isSaving ? "正在保存..." : step === 4 ? "完成设置，进入松鼠筑巢" : "下一步"}
             <ChevronRight size={16} />
           </button>
         </div>
+
+        {saveError && (
+          <div className="mt-4 rounded-2xl border-2 border-red-500 bg-red-50 px-4 py-3 text-xs font-medium text-red-700">
+            {saveError}
+          </div>
+        )}
 
         {step === 4 && (
           <div className="mt-4 rounded-2xl border-2 border-on-background bg-surface-container px-4 py-3 text-xs text-outline flex items-center gap-2">

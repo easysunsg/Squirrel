@@ -1,14 +1,16 @@
 import React, { useState } from "react";
 import { AppSettings, SquirrelPersonality } from "../types";
-import { motion } from "motion/react";
-import { 
-  Settings, Trash, Plus, Check, Heart, Home, 
-  Flame, Bell, ShieldAlert, RotateCcw, AlertTriangle, Sparkles
+import { motion, AnimatePresence } from "motion/react";
+import {
+  Settings, Trash, Plus, Check, Heart, Home,
+  Flame, Bell, RotateCcw, AlertTriangle, Sparkles,
+  Clock3, Sprout, X
 } from "lucide-react";
+import { ReminderSettingsPanel } from "./ReminderSettingsPanel";
 
 interface SettingsProps {
   settings: AppSettings;
-  onUpdateSettings: (settings: AppSettings) => void;
+  onUpdateSettings: (settings: AppSettings) => Promise<void> | void;
   onResetFactoryData: () => void;
 }
 
@@ -22,12 +24,17 @@ export const SettingsTab: React.FC<SettingsProps> = ({
   const [newLocName, setNewLocName] = useState("");
   const [locs, setLocs] = useState<string[]>(settings.selectedLocations);
   const [selectedHabits, setSelectedHabits] = useState<string[]>(settings.dietaryHabits);
+  const [lifestyleTag, setLifestyleTag] = useState(settings.lifestyleTag);
+  const [reminderTime, setReminderTime] = useState(settings.reminderTime);
+  const [isReminderPanelOpen, setIsReminderPanelOpen] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Preset arrays
   const presetHabits = [
-    "海鲜过敏 🦐", "无乳糖 🥛", "轻食主义 🥬", "拒绝浪费 🍎", 
-    "懒人速食 🍜", "零食控 🍫", "素食者 🥗", "辛辣重度 🌶️", 
+    "海鲜过敏 🦐", "无乳糖 🥛", "轻食主义 🥬", "拒绝浪费 🍎",
+    "懒人速食 🍜", "零食控 🍫", "素食者 🥗", "辛辣重度 🌶️",
     "按期清理强迫症 🧹"
   ];
 
@@ -56,16 +63,29 @@ export const SettingsTab: React.FC<SettingsProps> = ({
     setLocs(locs.filter(l => l !== name));
   };
 
-  const handleSaveSettings = () => {
-    onUpdateSettings({
-      ...settings,
-      squirrelPersonality: personality,
-      expirationStrategy: strategy,
-      selectedLocations: locs,
-      dietaryHabits: selectedHabits
-    });
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 2500);
+  const handleSaveSettings = async () => {
+    setIsSaving(true);
+    setSaveError(null);
+
+    try {
+      await onUpdateSettings({
+        ...settings,
+        squirrelPersonality: personality,
+        expirationStrategy: strategy,
+        selectedLocations: locs,
+        dietaryHabits: selectedHabits,
+        lifestyleTag,
+        reminderTime,
+      });
+      setSaveSuccess(true);
+      setIsReminderPanelOpen(false);
+      setTimeout(() => setSaveSuccess(false), 2500);
+    } catch (error) {
+      console.error("Failed to save settings", error);
+      setSaveError("设置保存失败，请确认后端服务已启动后重试。");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -75,8 +95,8 @@ export const SettingsTab: React.FC<SettingsProps> = ({
       <div className="flex items-center gap-3 bg-white border-[3px] border-on-background shadow-[4px_5px_0_0_#1b1c1c] rounded-[28px] p-4">
         <Settings className="text-white bg-primary p-1 rounded-full border-2 border-on-background" size={34} />
         <div>
-          <h2 className="font-display font-extrabold text-xl text-on-background">松鼠控制中心</h2>
-          <p className="text-xs text-outline">定制您的智能仓储预警灵敏度与管家个案</p>
+          <h2 className="font-display font-extrabold text-xl text-on-background">松鼠控制台</h2>
+          <p className="text-xs text-outline">统一管理提醒时间、生活标签、预警灵敏度与管家性格</p>
         </div>
       </div>
 
@@ -120,10 +140,38 @@ export const SettingsTab: React.FC<SettingsProps> = ({
 
           {/* Alert trigger options */}
           <div className="bg-white border-[3px] border-on-background shadow-[4px_5px_0_0_#1b1c1c] rounded-[28px] p-4 md:p-5 space-y-4">
-            <h3 className="font-display font-extrabold text-[14px] text-on-background flex items-center gap-1.5">
-              <Bell className="text-primary" size={17} />
-              <span>临保期预警阈分配</span>
-            </h3>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-display font-extrabold text-[14px] text-on-background flex items-center gap-1.5">
+                  <Bell className="text-primary" size={17} />
+                  <span>临保期预警阈分配</span>
+                </h3>
+                <p className="mt-1 text-[10px] text-outline">提醒策略会结合你的生活标签与每日提醒时间一起生效。</p>
+              </div>
+              <button
+                onClick={() => setIsReminderPanelOpen(true)}
+                className="shrink-0 rounded-full border-2 border-on-background bg-[#ffe92e] px-3 py-1.5 text-[10px] font-bold text-on-background shadow-[2px_3px_0_0_#1b1c1c] active-press-sm"
+              >
+                编辑提醒窗口
+              </button>
+            </div>
+
+            <div className="rounded-[22px] border-2 border-on-background bg-surface p-3 space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-bold text-outline flex items-center gap-1">
+                    <Sprout size={13} className="text-secondary" /> 生活标签
+                  </p>
+                  <p className="mt-1 text-sm font-display font-bold text-on-background">{lifestyleTag}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] font-bold text-outline flex items-center justify-end gap-1">
+                    <Clock3 size={13} className="text-tertiary" /> 每日提醒
+                  </p>
+                  <p className="mt-1 text-sm font-display font-bold text-on-background">{reminderTime}</p>
+                </div>
+              </div>
+            </div>
 
             <div className="grid grid-cols-3 gap-2">
               {[
@@ -247,12 +295,79 @@ export const SettingsTab: React.FC<SettingsProps> = ({
 
       </div>
 
+      {/* Reminder preferences window */}
+      <AnimatePresence>
+        {isReminderPanelOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4"
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 18, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 18, scale: 0.98 }}
+              className="w-full max-w-3xl rounded-[30px] border-[3px] border-on-background bg-[#fffdf6] p-5 shadow-[8px_10px_0_0_#1b1c1c]"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-[#00731e]">提醒设置窗口</p>
+                  <h3 className="mt-1 font-display text-2xl font-extrabold text-on-background">生活标签与提醒时间</h3>
+                  <p className="mt-2 text-xs text-outline">
+                    在控制台里也能直接修改这两个关键设置，不需要重新进入首次引导。
+                  </p>
+                </div>
+                <button
+                  onClick={() => setIsReminderPanelOpen(false)}
+                  className="rounded-full border-2 border-on-background bg-white p-2 active-press-sm"
+                  aria-label="关闭提醒设置窗口"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <ReminderSettingsPanel
+                lifestyleTag={lifestyleTag}
+                reminderTime={reminderTime}
+                onLifestyleTagChange={setLifestyleTag}
+                onReminderTimeChange={setReminderTime}
+                variant="modal"
+              />
+
+              <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-xs text-outline">保存全部设置后，新的生活标签和提醒时间会立即同步到系统中。</p>
+                <div className="flex gap-2 self-end">
+                  <button
+                    onClick={() => setIsReminderPanelOpen(false)}
+                    className="rounded-full border-2 border-on-background bg-white px-4 py-2 text-xs font-bold text-on-background active-press-sm"
+                  >
+                    先不改了
+                  </button>
+                  <button
+                    onClick={handleSaveSettings}
+                    className="rounded-full border-2 border-on-background bg-primary px-4 py-2 text-xs font-bold text-white shadow-[2px_3px_0_0_#1b1c1c] active-press-sm"
+                  >
+                    保存并同步
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Save action bar */}
       <div className="bg-white border-[3px] border-on-background shadow-[4px_5px_0_0_#1b1c1c] rounded-[28px] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         {saveSuccess ? (
           <div className="text-xs text-secondary font-bold flex items-center gap-1.5 animate-bounce">
             <Sparkles size={16} className="text-[#00731e]" />
             <span>吱！森林法则配对成功，设置档案已安全归巢！</span>
+          </div>
+        ) : saveError ? (
+          <div className="text-xs font-bold text-red-600 flex items-center gap-1.5">
+            <AlertTriangle size={16} className="text-red-500" />
+            <span>{saveError}</span>
           </div>
         ) : (
           <div className="text-xs text-outline italic">
@@ -262,9 +377,10 @@ export const SettingsTab: React.FC<SettingsProps> = ({
 
         <button
           onClick={handleSaveSettings}
-          className="bg-primary hover:bg-primary-container text-white border-2 border-on-background px-6 py-2.5 rounded-full font-display font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-[2px_3px_0_0_#1b1c1c] active-press ml-auto sm:ml-0"
+          disabled={isSaving}
+          className="bg-primary hover:bg-primary-container text-white border-2 border-on-background px-6 py-2.5 rounded-full font-display font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-[2px_3px_0_0_#1b1c1c] active-press ml-auto sm:ml-0 disabled:cursor-not-allowed disabled:opacity-60 disabled:translate-x-0 disabled:translate-y-0"
         >
-          <Check size={16} /> 保存所有设置
+          <Check size={16} /> {isSaving ? "正在保存..." : "保存所有设置"}
         </button>
       </div>
 

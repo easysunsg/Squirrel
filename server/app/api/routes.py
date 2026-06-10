@@ -14,7 +14,7 @@ from app.db.sqlite import (
     replace_state,
     upsert_item,
 )
-from app.models.schemas import AppState, ChatRequest, Item, Message, RecipeRequest, TextRequest
+from app.models.schemas import AppState, ChatRequest, ChatResult, Item, Message, RecipeRequest, TextRequest
 from app.services.ai import ai_service
 from app.services.markdown import item_status, sync_inventory_markdown
 from app.services.vector_store import vector_store
@@ -29,6 +29,88 @@ def sync_outputs() -> AppState:
     sync_inventory_markdown(state)
     vector_store.upsert_items(state.items)
     return state
+
+
+def apply_item_patch(existing: Item, patch: dict) -> Item:
+    data = existing.model_dump()
+    data.update(patch)
+    data["id"] = existing.id
+    return Item.model_validate(data)
+
+
+def match_items(inventory: list[Item], target: str | None) -> list[Item]:
+    if not target:
+        return []
+    exact = [item for item in inventory if item.title == target]
+    if exact:
+        return exact
+    partial = [item for item in inventory if target in item.title or item.title in target]
+    if partial:
+        return partial
+    return [item for item in inventory if target in item.location or target in item.spaceName]
+
+
+def build_candidate_suggestion(candidates: list[Item]) -> dict:
+    return {
+        "matches": [
+            {
+                "id": item.id,
+                "title": item.title,
+                "spaceName": item.spaceName,
+                "location": item.location,
+                "count": item.count,
+                "remainingPct": item.remainingPct,
+            }
+            for item in candidates[:6]
+        ]
+    }
+
+
+def execute_chat_operations(chat_result: ChatResult, conn, inventory: list[Item]) -> tuple[ChatResult, list[Item], list[str]]:
+    updated_items: list[Item] = []
+    deleted_ids: list[str] = []
+
+    for operation in chat_result.operations:
+        if operation.type == "add" and operation.item:
+            created = upsert_item(conn, operation.item)
+            updated_items.append(created)
+            continue
+
+        candidates = match_items(inventory, operation.target)
+        if not candidates:
+            return (
+                ChatResult(
+                    intent=chat_result.intent,
+                    replyText="我暂时没找到对应物品，请说得更具体一点。",
+                    needsConfirmation=True,
+                ),
+                [],
+                [],
+            )
+        if len(candidates) > 1:
+            return (
+                ChatResult(
+                    intent=chat_result.intent,
+                    replyText="我找到了多个候选物品，麻烦你说得更具体一点。",
+                    itemSuggestion=build_candidate_suggestion(candidates),
+                    needsConfirmation=True,
+                ),
+                [],
+                [],
+            )
+
+        target_item = candidates[0]
+        if operation.type == "remove" or operation.consumeAll:
+            if target_item.id:
+                delete_item(conn, target_item.id)
+                deleted_ids.append(target_item.id)
+            continue
+
+        patch = operation.patch or {}
+        updated = upsert_item(conn, apply_item_patch(target_item, patch))
+        updated_items.append(updated)
+
+    return chat_result, updated_items, deleted_ids
 
 
 @router.get("/health")
@@ -100,10 +182,7 @@ def patch_item(item_id: str, patch: dict):
         existing = next((item for item in list_items(conn) if item.id == item_id), None)
         if not existing:
             raise HTTPException(status_code=404, detail="Item not found")
-        data = existing.model_dump()
-        data.update(patch)
-        data["id"] = item_id
-        updated = upsert_item(conn, Item.model_validate(data))
+        updated = upsert_item(conn, apply_item_patch(existing, patch))
         state = get_state(conn)
     sync_inventory_markdown(state)
     vector_store.upsert_items([updated])
@@ -183,18 +262,35 @@ def cli_add(request: TextRequest):
 def chat(request: ChatRequest):
     with connect() as conn:
         history = request.chatHistory or list_messages(conn)
-        inventory = request.currentInventory or list_items(conn)
         latest = history[-1].text if history else ""
-        reply = ai_service.chat(latest, inventory)
+        inventory = list_items(conn)
+        chat_result = ai_service.chat(latest, inventory)
+        chat_result, updated_items, deleted_ids = execute_chat_operations(chat_result, conn, inventory)
+        full_history = history.copy()
         assistant_message = Message(
             id=f"msg-ai-{len(history) + 1}",
             sender="assistant",
-            text=reply,
+            text=chat_result.replyText,
             timestamp="刚刚",
+            itemSuggestion=chat_result.itemSuggestion,
         )
-        full_history = [*history, assistant_message]
+        full_history.append(assistant_message)
         replace_messages(conn, full_history)
-    return {"reply": reply, "itemSuggestion": None, "messages": full_history}
+        state = get_state(conn)
+
+    if updated_items or deleted_ids:
+        sync_inventory_markdown(state)
+        if updated_items:
+            vector_store.upsert_items(updated_items)
+        for item_id in deleted_ids:
+            vector_store.delete_item(item_id)
+
+    return {
+        "reply": chat_result.replyText,
+        "itemSuggestion": chat_result.itemSuggestion,
+        "messages": full_history,
+        "items": state.items,
+    }
 
 
 @router.get("/messages")

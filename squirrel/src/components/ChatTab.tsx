@@ -8,7 +8,7 @@ interface ChatProps {
   items: InventoryItem[];
   preinput: string;
   onClearPreinput: () => void;
-  onSaveNewItem: (item: InventoryItem) => void;
+  onSaveNewItem: (item: InventoryItem) => Promise<void> | void;
   onSendMessage: (text: string) => Promise<void> | void;
   onAppendLocalMessage: (message: ChatMessage) => void;
   onClearChatHistory: () => void;
@@ -70,26 +70,31 @@ export const ChatTab: React.FC<ChatProps> = ({
     handleSend();
   };
 
-  const handleQuickAdd = () => {
+  const handleQuickAdd = async () => {
     const today = new Date();
     const expiry = new Date(today);
     expiry.setDate(today.getDate() + 7);
 
-    onSaveNewItem({
-      id: `item-${Date.now()}`,
-      name: "新鲜番茄",
-      category: "food",
-      quantity: 3,
-      unit: "个",
-      location: settings.selectedLocations[0] || "主冰箱",
-      purchaseDate: today.toISOString().slice(0, 10),
-      expiryDate: expiry.toISOString().slice(0, 10),
-      remindDaysBefore: 3,
-      tags: [settings.lifestyleTag, "手动快捷添加"],
-      note: "从聊天页快捷添加的测试物品",
-    });
+    try {
+      await onSaveNewItem({
+        id: `item-${Date.now()}`,
+        name: "新鲜番茄",
+        category: "food",
+        quantity: 3,
+        unit: "个",
+        location: settings.selectedLocations[0] || "主冰箱",
+        purchaseDate: today.toISOString().slice(0, 10),
+        expiryDate: expiry.toISOString().slice(0, 10),
+        remindDaysBefore: 3,
+        tags: [settings.lifestyleTag, "手动快捷添加"],
+        note: "从聊天页快捷添加的测试物品",
+      });
 
-    onAppendLocalMessage(createMessage("assistant", "已帮你快捷添加一条「新鲜番茄」到库存。"));
+      onAppendLocalMessage(createMessage("assistant", "已帮你快捷添加一条「新鲜番茄」到库存。"));
+    } catch (error) {
+      console.error("Failed to quick add inventory item", error);
+      onAppendLocalMessage(createMessage("assistant", "快捷添加失败，请确认后端服务已启动后重试。"));
+    }
   };
 
   return (

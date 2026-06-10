@@ -10,8 +10,8 @@ interface DrawerProps {
   action: 'create' | 'edit' | 'view';
   item: InventoryItem | null;
   locations: string[];
-  onSave: (item: InventoryItem) => void;
-  onDelete: (id: string) => void;
+  onSave: (item: InventoryItem) => Promise<void> | void;
+  onDelete: (id: string) => Promise<void> | void;
 }
 
 export const Drawer: React.FC<DrawerProps> = ({
@@ -35,6 +35,8 @@ export const Drawer: React.FC<DrawerProps> = ({
   const [tags, setTags] = useState<string[]>([]);
   const [newTag, setNewTag] = useState("");
   const [note, setNote] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const defaultLocations = locations.length > 0 ? locations : ["主冰箱", "厨房储物柜", "玄关柜"];
 
@@ -87,7 +89,7 @@ export const Drawer: React.FC<DrawerProps> = ({
     setTags(tags.filter(tag => tag !== t));
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!name.trim()) {
       alert("吱！请写上物体的名字，不然松鼠记不住呀！");
       return;
@@ -107,8 +109,18 @@ export const Drawer: React.FC<DrawerProps> = ({
       note: note.trim()
     };
 
-    onSave(payload);
-    onClose();
+    setIsSaving(true);
+    setSaveError(null);
+
+    try {
+      await onSave(payload);
+      onClose();
+    } catch (error) {
+      console.error("Failed to save inventory item", error);
+      setSaveError("保存失败，请确认后端服务已启动后重试。");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const isView = action === "view";
@@ -361,17 +373,35 @@ export const Drawer: React.FC<DrawerProps> = ({
               </div>
             </div>
 
+            {saveError && (
+              <div className="border-t-2 border-on-background bg-red-50 px-4 py-3 text-xs font-bold text-red-600">
+                {saveError}
+              </div>
+            )}
+
             {/* Sticky Actions in footer */}
             <div className="p-4 border-t-2 border-on-background bg-surface-container flex items-center justify-between gap-3">
               {item && !isView && (
                 <button
-                  onClick={() => {
-                    if (confirm(`吱！您确定要摧毁【${item.name}】的档案，把它从树洞里腾出来吗？`)) {
-                      onDelete(item.id);
+                  disabled={isSaving}
+                  onClick={async () => {
+                    if (!confirm(`吱！您确定要摧毁【${item.name}】的档案，把它从树洞里腾出来吗？`)) {
+                      return;
+                    }
+
+                    setIsSaving(true);
+                    setSaveError(null);
+                    try {
+                      await onDelete(item.id);
                       onClose();
+                    } catch (error) {
+                      console.error("Failed to delete inventory item", error);
+                      setSaveError("删除失败，请确认后端服务已启动后重试。");
+                    } finally {
+                      setIsSaving(false);
                     }
                   }}
-                  className="flex items-center gap-1.5 bg-error text-white font-display border-2 border-on-background hover:bg-opacity-95 px-4 py-2 text-xs rounded-xl active-press cursor-pointer"
+                  className="flex items-center gap-1.5 bg-error text-white font-display border-2 border-on-background hover:bg-opacity-95 px-4 py-2 text-xs rounded-xl active-press cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Trash size={14} />
                   销毁此档案
@@ -402,10 +432,11 @@ export const Drawer: React.FC<DrawerProps> = ({
                   </button>
                   <button
                     onClick={handleSave}
-                    className="flex items-center gap-1 bg-primary text-white font-display border-2 border-on-background hover:bg-opacity-95 px-5 py-2 text-xs rounded-xl active-press cursor-pointer hard-shadow-sm font-bold"
+                    disabled={isSaving}
+                    className="flex items-center gap-1 bg-primary text-white font-display border-2 border-on-background hover:bg-opacity-95 px-5 py-2 text-xs rounded-xl active-press cursor-pointer hard-shadow-sm font-bold disabled:cursor-not-allowed disabled:opacity-60 disabled:translate-x-0 disabled:translate-y-0"
                   >
                     <Save size={14} />
-                    封存并归巢
+                    {isSaving ? "正在封存..." : "封存并归巢"}
                   </button>
                 </div>
               )}
