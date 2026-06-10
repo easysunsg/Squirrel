@@ -34,4 +34,10 @@ export interface ChatMessage {
   itemSuggestion?: Partial<InventoryItem>; // AI returned recognition suggestions
 }
 
+export interface ChatApiResponse {
+  reply?: string;
+  itemSuggestion?: Partial<InventoryItem>;
+  messages?: ChatMessage[];
+}
+
 export type DrawerActionType = 'view' | 'edit' | 'create';

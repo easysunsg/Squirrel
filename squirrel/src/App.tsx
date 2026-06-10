@@ -14,7 +14,7 @@ import { Drawer } from "./components/Drawer";
 import { InventoryTab } from "./components/InventoryTab";
 import { Onboarding } from "./components/Onboarding";
 import { SettingsTab } from "./components/SettingsTab";
-import { AppSettings, ChatMessage, DrawerActionType, InventoryItem } from "./types";
+import { AppSettings, ChatApiResponse, ChatMessage, DrawerActionType, InventoryItem } from "./types";
 import { DEFAULT_INVENTORY_ITEMS } from "./utils";
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -44,10 +44,39 @@ function normalizeMessage(message: Partial<ChatMessage>, index: number): ChatMes
   };
 }
 
+function normalizeMessageList(value: unknown): ChatMessage[] {
+  if (!Array.isArray(value)) {
+    return [DEFAULT_CHAT_MESSAGE];
+  }
+
+  const messages = value.map((message, index) => normalizeMessage(message, index));
+  return messages.length > 0 ? messages : [DEFAULT_CHAT_MESSAGE];
+}
+
+function createChatMessage(sender: ChatMessage["sender"], text: string, itemSuggestion?: ChatMessage["itemSuggestion"]): ChatMessage {
+  return {
+    id: `msg-${sender}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    sender,
+    text,
+    timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    itemSuggestion,
+  };
+}
+
+function createFallbackReply(text: string, settings: AppSettings, items: InventoryItem[]): ChatMessage {
+  const itemNames = items.slice(0, 4).map((item) => item.name).join("、") || "当前库存";
+  return createChatMessage(
+    "assistant",
+    `收到「${text}」。后端暂时不可用，我先用本地模式回应：我会结合你的生活标签「${settings.lifestyleTag}」和 ${settings.reminderTime} 的提醒时间来处理。当前可参考的库存有：${itemNames}。`
+  );
+}
+
 export default function App() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([DEFAULT_CHAT_MESSAGE]);
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("dashboard");
   const [chatPreinput, setChatPreinput] = useState("");
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -85,16 +114,13 @@ export default function App() {
           throw new Error(`Failed to load messages: ${response.status}`);
         }
         const data = await response.json();
-        const nextMessages = Array.isArray(data.messages)
-          ? data.messages.map(normalizeMessage)
-          : [DEFAULT_CHAT_MESSAGE];
-        setMessages(nextMessages.length > 0 ? nextMessages : [DEFAULT_CHAT_MESSAGE]);
+        setMessages(normalizeMessageList(data.messages));
       } catch (error) {
         console.error("Failed to load messages from server", error);
         const savedChat = localStorage.getItem("squirrel_nest_chat_hist");
         if (savedChat) {
           try {
-            setMessages(JSON.parse(savedChat));
+            setMessages(normalizeMessageList(JSON.parse(savedChat)));
             return;
           } catch (parseError) {
             console.error("Failed to read local chat history", parseError);
@@ -142,23 +168,69 @@ export default function App() {
     saveItemsToStorage(items.filter((item) => item.id !== id));
   };
 
-  const handleSetMessages = (nextMessages: ChatMessage[]) => {
+  const appendChatMessage = (message: ChatMessage) => {
+    setMessages((currentMessages) => [...currentMessages, message]);
+  };
+
+  const handleSendChatMessage = async (text: string) => {
+    const userMessage = createChatMessage("user", text);
+    const nextMessages = [...messages, userMessage];
+
     setMessages(nextMessages);
+    setChatError(null);
+    setIsSendingMessage(true);
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          chatHistory: nextMessages,
+          personality: settings.squirrelPersonality,
+          habits: settings.dietaryHabits,
+          locations: settings.selectedLocations,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to send chat message: ${response.status}`);
+      }
+
+      const data = (await response.json()) as ChatApiResponse;
+      if (Array.isArray(data.messages)) {
+        setMessages(normalizeMessageList(data.messages));
+        return;
+      }
+
+      if (data.reply) {
+        appendChatMessage(createChatMessage("assistant", data.reply, data.itemSuggestion));
+        return;
+      }
+
+      throw new Error("Chat response did not include messages or reply");
+    } catch (error) {
+      console.error("Failed to send chat message", error);
+      setChatError("后端暂时不可用，已使用本地回复。");
+      setMessages([...nextMessages, createFallbackReply(text, settings, items)]);
+    } finally {
+      setIsSendingMessage(false);
+    }
   };
 
   const handleClearChatHistory = async () => {
+    setChatError(null);
     try {
       const response = await fetch("/api/messages", { method: "DELETE" });
       if (!response.ok) {
         throw new Error(`Failed to clear messages: ${response.status}`);
       }
       const data = await response.json();
-      const nextMessages = Array.isArray(data.messages)
-        ? data.messages.map(normalizeMessage)
-        : [DEFAULT_CHAT_MESSAGE];
-      setMessages(nextMessages);
+      setMessages(normalizeMessageList(data.messages));
     } catch (error) {
       console.error("Failed to clear messages on server", error);
+      setChatError("后端清空失败，已在本地重置聊天记录。");
       setMessages([DEFAULT_CHAT_MESSAGE]);
     }
   };
@@ -191,8 +263,8 @@ export default function App() {
 
   const navItems = [
     { id: "dashboard", label: "仓储大盘", icon: LayoutDashboard },
-    { id: "inventory", label: "树洞聊斋", icon: Archive },
-    { id: "chat", label: "小窝存根", icon: MessageSquare },
+    { id: "inventory", label: "小窝存根", icon: Archive },
+    { id: "chat", label: "树洞聊斋", icon: MessageSquare },
     { id: "settings", label: "控制阀阁", icon: SettingsIcon },
   ];
 
@@ -343,11 +415,14 @@ export default function App() {
                 preinput={chatPreinput}
                 onClearPreinput={() => setChatPreinput("")}
                 onSaveNewItem={handleSaveItem}
-                onPostChatMessage={handleSetMessages}
+                onSendMessage={handleSendChatMessage}
+                onAppendLocalMessage={appendChatMessage}
                 onClearChatHistory={() => {
                   void handleClearChatHistory();
                 }}
                 messages={messages}
+                isSendingMessage={isSendingMessage}
+                chatError={chatError}
               />
             )}
 

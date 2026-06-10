@@ -9,9 +9,12 @@ interface ChatProps {
   preinput: string;
   onClearPreinput: () => void;
   onSaveNewItem: (item: InventoryItem) => void;
-  onPostChatMessage: (msg: ChatMessage) => void;
+  onSendMessage: (text: string) => Promise<void> | void;
+  onAppendLocalMessage: (message: ChatMessage) => void;
   onClearChatHistory: () => void;
   messages: ChatMessage[];
+  isSendingMessage: boolean;
+  chatError?: string | null;
 }
 
 export const ChatTab: React.FC<ChatProps> = ({
@@ -20,9 +23,12 @@ export const ChatTab: React.FC<ChatProps> = ({
   preinput,
   onClearPreinput,
   onSaveNewItem,
-  onPostChatMessage,
+  onSendMessage,
+  onAppendLocalMessage,
   onClearChatHistory,
   messages,
+  isSendingMessage,
+  chatError,
 }) => {
   const [inputText, setInputText] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -47,22 +53,21 @@ export const ChatTab: React.FC<ChatProps> = ({
 
   const handleSend = () => {
     const text = inputText.trim();
-    if (!text) {
+    if (!text || isSendingMessage) {
       return;
     }
 
-    const userMessage = createMessage("user", text);
-    onPostChatMessage(userMessage);
     setInputText("");
+    void onSendMessage(text);
+  };
 
-    window.setTimeout(() => {
-      const itemNames = items.slice(0, 4).map((item) => item.name).join("、") || "当前库存";
-      const reply = createMessage(
-        "assistant",
-        `收到。我会结合你的生活标签「${settings.lifestyleTag}」和 ${settings.reminderTime} 的提醒时间来处理。当前可参考的库存有：${itemNames}。`
-      );
-      onPostChatMessage(reply);
-    }, 300);
+  const handleInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) {
+      return;
+    }
+
+    event.preventDefault();
+    handleSend();
   };
 
   const handleQuickAdd = () => {
@@ -84,7 +89,7 @@ export const ChatTab: React.FC<ChatProps> = ({
       note: "从聊天页快捷添加的测试物品",
     });
 
-    onPostChatMessage(createMessage("assistant", "已帮你快捷添加一条「新鲜番茄」到库存。"));
+    onAppendLocalMessage(createMessage("assistant", "已帮你快捷添加一条「新鲜番茄」到库存。"));
   };
 
   return (
@@ -139,27 +144,29 @@ export const ChatTab: React.FC<ChatProps> = ({
           <div ref={messagesEndRef} />
         </div>
 
-        <div className="p-4 border-t-2 border-on-background bg-white">
+        <div className="p-4 border-t-2 border-on-background bg-white space-y-2">
+          {chatError && (
+            <div className="rounded-xl border-2 border-orange-300 bg-orange-50 px-3 py-2 text-xs font-medium text-orange-700">
+              {chatError}
+            </div>
+          )}
           <div className="flex gap-2">
             <input
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  handleSend();
-                }
-              }}
+              onKeyDown={handleInputKeyDown}
+              disabled={isSendingMessage}
               placeholder="输入库存、收纳或临期提醒问题..."
-              className="flex-1 p-3 border-2 border-on-background rounded-xl bg-surface text-sm focus:bg-white focus:outline-none"
+              className="flex-1 p-3 border-2 border-on-background rounded-xl bg-surface text-sm focus:bg-white focus:outline-none disabled:opacity-60"
             />
             <button
               onClick={handleSend}
-              disabled={!inputText.trim()}
+              disabled={!inputText.trim() || isSendingMessage}
               className="px-4 bg-primary text-white border-2 border-on-background rounded-xl hover:bg-opacity-95 active-press disabled:opacity-50 disabled:pointer-events-none"
               title="发送"
             >
-              <Send size={18} />
+              {isSendingMessage ? <span className="text-xs font-bold">发送中</span> : <Send size={18} />}
             </button>
           </div>
         </div>
