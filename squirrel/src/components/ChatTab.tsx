@@ -99,8 +99,8 @@ export const ChatTab: React.FC<ChatProps> = ({
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-      <section className="lg:col-span-3 bg-white border-[3px] border-on-background shadow-[4px_5px_0_0_#1b1c1c] rounded-[28px] min-h-[640px] flex flex-col overflow-hidden">
-        <div className="p-4 border-b-2 border-on-background flex items-center justify-between gap-3">
+      <section className="lg:col-span-3 bg-white border-[3px] border-on-background shadow-[4px_5px_0_0_#1b1c1c] rounded-[28px] flex flex-col overflow-hidden h-[800px]">
+        <div className="p-4 border-b-2 border-on-background flex items-center justify-between gap-3 flex-shrink-0">
           <div className="flex items-center gap-2">
             <MessageSquare className="text-primary" size={22} />
             <div>
@@ -117,7 +117,7 @@ export const ChatTab: React.FC<ChatProps> = ({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-surface-container-low">
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-surface-container-low min-h-0">
           {messages.length === 0 ? (
             <div className="h-full min-h-[360px] flex items-center justify-center text-center text-outline text-sm">
               暂无聊天记录，输入一句话开始整理。

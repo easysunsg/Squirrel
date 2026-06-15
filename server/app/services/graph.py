@@ -260,7 +260,30 @@ def recipe_node(state: SquirrelGraphState) -> SquirrelGraphState:
 
 
 def chat_node(state: SquirrelGraphState) -> SquirrelGraphState:
+    """Handle general chat using LLM with rule-based fallback."""
+    text = state.get("text", "")
     inventory = state.get("inventory", [])
+
+    # Build context summary
+    context_parts = [f"库存总数：{len(inventory)} 件"]
+    danger = [item for item in inventory if item_status(item) == "danger"]
+    if danger:
+        context_parts.append(f"临期/告急：{len(danger)} 件")
+
+    context = "；".join(context_parts)
+
+    # Try LLM chat
+    if llm_service.enabled:
+        try:
+            reply = llm_service.chat_reply(text, context)
+            logger.info("LLM chat reply succeeded")
+            return {
+                "chat_result": ChatResult(intent="chat", replyText=reply)
+            }
+        except Exception:
+            logger.exception("LLM chat reply failed, falling back to template")
+
+    # Fallback to template
     return {
         "chat_result": ChatResult(
             intent="chat",
