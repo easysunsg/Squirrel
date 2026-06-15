@@ -1,9 +1,13 @@
+import logging
 from typing import TypedDict
 
 from app.models.schemas import ChatOperation, ChatResult, Item, RecipeRequest
+from app.services.llm import llm_service
 from app.services.markdown import item_status
-from app.services.parser import build_chat_result, extract_remaining_patch, extract_search_keyword, infer_search_terms
+from app.services.parser import build_chat_result, extract_remaining_patch, extract_search_keyword, infer_search_terms, parse_lightning_text
 from app.services.vector_store import vector_store
+
+logger = logging.getLogger(__name__)
 
 
 class SquirrelGraphState(TypedDict, total=False):
@@ -34,10 +38,60 @@ def match_search_items(text: str, inventory: list[Item]) -> list[Item]:
 
 
 def classify_intent(state: SquirrelGraphState) -> SquirrelGraphState:
+    """Classify user intent using LLM with rule-based fallback."""
     text = state.get("text", "")
+    inventory = state.get("inventory", [])
+
+    # Try LLM first
+    if llm_service.enabled:
+        try:
+            inventory_summary = summarize_titles(inventory, limit=10) if inventory else "库存为空"
+            llm_result = llm_service.classify_intent(text, inventory_summary)
+            intent = llm_result.get("intent", "unknown")
+            entities = llm_result.get("entities", {})
+
+            if intent != "unknown":
+                # Build ChatResult from LLM output
+                chat_result = ChatResult(intent=intent, replyText=f"已识别意图：{intent}")
+
+                # Convert entities to operations
+                if intent == "add":
+                    # Use rule-based parser for item extraction (more reliable for structured input)
+                    parsed_items = parse_lightning_text(text)
+                    chat_result.operations = [ChatOperation(type="add", item=item) for item in parsed_items]
+                    chat_result.replyText = f"已识别出 {len(parsed_items)} 件物品，准备入库。"
+                elif intent == "consume" or intent == "remove":
+                    target = entities.get("target")
+                    chat_result.operations = [ChatOperation(
+                        type=intent,
+                        target=target,
+                        patch={"remainingPct": entities.get("remaining_pct"), "count": entities.get("count")} if intent == "consume" and entities.get("remaining_pct") is not None else None,
+                    )]
+                elif intent == "update_location":
+                    target = entities.get("target")
+                    location = entities.get("location")
+                    if target and location:
+                        chat_result.operations = [ChatOperation(type="update", target=target, patch={"location": location})]
+                elif intent == "update_expiry":
+                    target = entities.get("target")
+                    expire_days = entities.get("expire_days")
+                    if target and expire_days is not None:
+                        from app.services.parser import days_from_now
+                        chat_result.operations = [ChatOperation(type="update", target=target, patch={"expireDate": days_from_now(expire_days)})]
+
+                logger.info("LLM intent classification succeeded intent=%s", intent)
+                return {
+                    "text": text,
+                    "inventory": inventory,
+                    "chat_result": chat_result,
+                }
+        except Exception:
+            logger.exception("LLM intent classification failed, falling back to rules")
+
+    # Fallback to rule-based
     return {
         "text": text,
-        "inventory": state.get("inventory", []),
+        "inventory": inventory,
         "chat_result": build_chat_result(text),
     }
 
@@ -164,10 +218,27 @@ def idle_query_node(state: SquirrelGraphState) -> SquirrelGraphState:
 
 
 def recipe_node(state: SquirrelGraphState) -> SquirrelGraphState:
-    request = RecipeRequest(inventory=state.get("inventory", []))
-    candidates = [item for item in request.inventory if item.spaceName in ("主厨房", "主冰箱")]
+    """Generate recipe using LLM with rule-based fallback."""
+    inventory = state.get("inventory", [])
+    candidates = [item for item in inventory if item.spaceName in ("主厨房", "主冰箱")]
     urgent = next((item for item in candidates if item_status(item) != "full"), None)
     urgent = urgent or (candidates[0] if candidates else None)
+
+    # Try LLM generation
+    if llm_service.enabled:
+        try:
+            ingredients = [item.title for item in candidates[:10]]
+            urgent_item = urgent.title if urgent else None
+            recipe = llm_service.generate_recipe(ingredients, urgent_item)
+            logger.info("LLM recipe generation succeeded title=%s", recipe.get("title"))
+            return {
+                "chat_result": ChatResult(intent="recipe", replyText=recipe["description"]),
+                "recipe": recipe,
+            }
+        except Exception:
+            logger.exception("LLM recipe generation failed, falling back to template")
+
+    # Fallback to template
     if not urgent:
         recipe = {
             "title": "清爽库存拼盘",

@@ -3,6 +3,7 @@ import { InventoryItem, InventoryCategory } from "../types";
 import { CATEGORY_MAP } from "../utils";
 import { motion, AnimatePresence } from "motion/react";
 import { X, Save, Trash, Calendar, Plus, Bookmark, HelpCircle } from "lucide-react";
+import { Modal } from "./Modal";
 
 interface DrawerProps {
   isOpen: boolean;
@@ -37,6 +38,17 @@ export const Drawer: React.FC<DrawerProps> = ({
   const [note, setNote] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  const [alertModal, setAlertModal] = useState<{
+    isOpen: boolean;
+    message: string;
+  }>({ isOpen: false, message: "" });
+
+  const [deleteConfirmModal, setDeleteConfirmModal] = useState<{
+    isOpen: boolean;
+    itemId: string;
+    itemName: string;
+  }>({ isOpen: false, itemId: "", itemName: "" });
 
   const defaultLocations = locations.length > 0 ? locations : ["主冰箱", "厨房储物柜", "玄关柜"];
 
@@ -91,7 +103,10 @@ export const Drawer: React.FC<DrawerProps> = ({
 
   const handleSave = async () => {
     if (!name.trim()) {
-      alert("吱！请写上物体的名字，不然松鼠记不住呀！");
+      setAlertModal({
+        isOpen: true,
+        message: "吱！请写上物体的名字，不然松鼠记不住呀！",
+      });
       return;
     }
 
@@ -384,22 +399,12 @@ export const Drawer: React.FC<DrawerProps> = ({
               {item && !isView && (
                 <button
                   disabled={isSaving}
-                  onClick={async () => {
-                    if (!confirm(`吱！您确定要摧毁【${item.name}】的档案，把它从树洞里腾出来吗？`)) {
-                      return;
-                    }
-
-                    setIsSaving(true);
-                    setSaveError(null);
-                    try {
-                      await onDelete(item.id);
-                      onClose();
-                    } catch (error) {
-                      console.error("Failed to delete inventory item", error);
-                      setSaveError("删除失败，请确认后端服务已启动后重试。");
-                    } finally {
-                      setIsSaving(false);
-                    }
+                  onClick={() => {
+                    setDeleteConfirmModal({
+                      isOpen: true,
+                      itemId: item.id,
+                      itemName: item.name,
+                    });
                   }}
                   className="flex items-center gap-1.5 bg-error text-white font-display border-2 border-on-background hover:bg-opacity-95 px-4 py-2 text-xs rounded-xl active-press cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
                 >
@@ -444,6 +449,39 @@ export const Drawer: React.FC<DrawerProps> = ({
           </motion.div>
         </>
       )}
+
+      {/* Modals */}
+      <Modal
+        isOpen={alertModal.isOpen}
+        onClose={() => setAlertModal({ isOpen: false, message: "" })}
+        type="alert"
+        variant="warning"
+        message={alertModal.message}
+      />
+
+      <Modal
+        isOpen={deleteConfirmModal.isOpen}
+        onClose={() => setDeleteConfirmModal({ isOpen: false, itemId: "", itemName: "" })}
+        onConfirm={async () => {
+          setIsSaving(true);
+          setSaveError(null);
+          try {
+            await onDelete(deleteConfirmModal.itemId);
+            onClose();
+          } catch (error) {
+            console.error("Failed to delete inventory item", error);
+            setSaveError("删除失败，请确认后端服务已启动后重试。");
+          } finally {
+            setIsSaving(false);
+          }
+        }}
+        type="confirm"
+        variant="danger"
+        title="确认销毁"
+        message={`吱！您确定要摧毁【${deleteConfirmModal.itemName}】的档案，把它从树洞里腾出来吗？`}
+        confirmText="确认销毁"
+        cancelText="再想想"
+      />
     </AnimatePresence>
   );
 };

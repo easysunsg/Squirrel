@@ -7,6 +7,7 @@ import {
   Clock3, Sprout, X
 } from "lucide-react";
 import { ReminderSettingsPanel } from "./ReminderSettingsPanel";
+import { Modal } from "./Modal";
 
 interface SettingsProps {
   settings: AppSettings;
@@ -30,6 +31,13 @@ export const SettingsTab: React.FC<SettingsProps> = ({
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  const [alertModal, setAlertModal] = useState<{
+    isOpen: boolean;
+    message: string;
+  }>({ isOpen: false, message: "" });
+
+  const [resetConfirmModal, setResetConfirmModal] = useState(false);
 
   // Preset arrays
   const presetHabits = [
@@ -57,7 +65,10 @@ export const SettingsTab: React.FC<SettingsProps> = ({
 
   const handleRemoveLoc = (name: string) => {
     if (locs.length <= 1) {
-      alert("吱！请至少保留一个藏宝储蓄处，不然松鼠的果子就没地方放了！");
+      setAlertModal({
+        isOpen: true,
+        message: "吱！请至少保留一个藏宝储蓄处，不然松鼠的果子就没地方放了！",
+      });
       return;
     }
     setLocs(locs.filter(l => l !== name));
@@ -280,11 +291,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
               点击重置按钮将彻底清除浏览器内缓存的所有收纳存案和习惯档案，松鼠会将小家完美还原到最初状态并重新指引。
             </p>
             <button
-              onClick={() => {
-                if (confirm("🚨【毁灭警告】您确定要粉碎所有数据，重新让小家变回白纸一张吗？")) {
-                  onResetFactoryData();
-                }
-              }}
+              onClick={() => setResetConfirmModal(true)}
               className="flex items-center justify-center gap-1.5 w-full bg-red-600 hover:bg-red-700 text-white border-2 border-on-background text-xs font-bold py-2 px-4 rounded-full shadow-[2px_3px_0_0_#1b1c1c] active-press cursor-pointer font-display"
             >
               <RotateCcw size={14} /> 一键粉碎数据并恢复向导
@@ -383,6 +390,29 @@ export const SettingsTab: React.FC<SettingsProps> = ({
           <Check size={16} /> {isSaving ? "正在保存..." : "保存所有设置"}
         </button>
       </div>
+
+      {/* Modals */}
+      <Modal
+        isOpen={alertModal.isOpen}
+        onClose={() => setAlertModal({ isOpen: false, message: "" })}
+        type="alert"
+        variant="warning"
+        message={alertModal.message}
+      />
+
+      <Modal
+        isOpen={resetConfirmModal}
+        onClose={() => setResetConfirmModal(false)}
+        onConfirm={() => {
+          onResetFactoryData();
+        }}
+        type="confirm"
+        variant="danger"
+        title="🚨 毁灭警告"
+        message="您确定要粉碎所有数据，重新让小家变回白纸一张吗？"
+        confirmText="确认粉碎"
+        cancelText="我再想想"
+      />
 
     </div>
   );

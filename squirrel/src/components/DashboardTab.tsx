@@ -1,11 +1,12 @@
-import React from "react";
+import React, { useState } from "react";
 import { InventoryItem, AppSettings } from "../types";
 import { getItemStatus, CATEGORY_MAP } from "../utils";
 import { motion } from "motion/react";
-import { 
-  AlertTriangle, CheckCircle, Apple, AlertOctagon, Sparkles, 
+import {
+  AlertTriangle, CheckCircle, Apple, AlertOctagon, Sparkles,
   ArrowRight, Search, ClipboardList, Lightbulb, ChefHat
 } from "lucide-react";
+import { Modal } from "./Modal";
 
 interface DashboardProps {
   items: InventoryItem[];
@@ -24,6 +25,17 @@ export const DashboardTab: React.FC<DashboardProps> = ({
   onQuickCleanItem,
   onViewItem,
 }) => {
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    itemId: string;
+    itemName: string;
+  }>({ isOpen: false, itemId: "", itemName: "" });
+
+  const [alertModal, setAlertModal] = useState<{
+    isOpen: boolean;
+    message: string;
+  }>({ isOpen: false, message: "" });
+
   // Compute statuses
   const strategy = settings.expirationStrategy;
   
@@ -229,12 +241,11 @@ export const DashboardTab: React.FC<DashboardProps> = ({
                       </button>
                       <button
                         onClick={() => {
-                          if (confirm(`吱！您确定已经吃完或清理了【${item.name}】，并从清单中删除吗？`)) {
-                            void Promise.resolve(onQuickCleanItem(item.id)).catch((error) => {
-                              console.error("Failed to quick clean item", error);
-                              alert("清理失败，请确认后端服务已启动后重试。");
-                            });
-                          }
+                          setConfirmModal({
+                            isOpen: true,
+                            itemId: item.id,
+                            itemName: item.name,
+                          });
                         }}
                         className="px-2 py-1 bg-[#ffd5d1] hover:bg-[#ffe9e6] border-2 border-on-background text-[10px] text-error font-bold rounded-full cursor-pointer"
                         title="标记吃完/清理"
@@ -328,6 +339,35 @@ export const DashboardTab: React.FC<DashboardProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Modals */}
+      <Modal
+        isOpen={confirmModal.isOpen}
+        onClose={() => setConfirmModal({ isOpen: false, itemId: "", itemName: "" })}
+        onConfirm={() => {
+          void Promise.resolve(onQuickCleanItem(confirmModal.itemId)).catch((error) => {
+            console.error("Failed to quick clean item", error);
+            setAlertModal({
+              isOpen: true,
+              message: "清理失败，请确认后端服务已启动后重试。",
+            });
+          });
+        }}
+        type="confirm"
+        variant="warning"
+        title="确认清理"
+        message={`吱！您确定已经吃完或清理了【${confirmModal.itemName}】，并从清单中删除吗？`}
+        confirmText="确认清理"
+        cancelText="再想想"
+      />
+
+      <Modal
+        isOpen={alertModal.isOpen}
+        onClose={() => setAlertModal({ isOpen: false, message: "" })}
+        type="alert"
+        variant="danger"
+        message={alertModal.message}
+      />
     </div>
   );
 };
