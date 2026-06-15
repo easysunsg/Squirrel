@@ -205,7 +205,7 @@ export const Drawer: React.FC<DrawerProps> = ({
                     disabled={isView}
                     value={category}
                     onChange={(e) => setCategory(e.target.value as InventoryCategory)}
-                    className="w-full p-2.5 border-2 border-on-background rounded-xl bg-white text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                    className="w-full p-2.5 border-2 border-on-background rounded-xl bg-white text-sm focus:outline-none focus:ring-1 focus:ring-primary relative z-10 cursor-pointer disabled:cursor-not-allowed disabled:opacity-75 disabled:bg-surface-container"
                   >
                     {Object.entries(CATEGORY_MAP).map(([key, meta]) => (
                       <option key={key} value={key}>
@@ -221,7 +221,7 @@ export const Drawer: React.FC<DrawerProps> = ({
                     disabled={isView}
                     value={location}
                     onChange={(e) => setLocation(e.target.value)}
-                    className="w-full p-2.5 border-2 border-on-background rounded-xl bg-white text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                    className="w-full p-2.5 border-2 border-on-background rounded-xl bg-white text-sm focus:outline-none focus:ring-1 focus:ring-primary relative z-10 cursor-pointer disabled:cursor-not-allowed disabled:opacity-75 disabled:bg-surface-container"
                   >
                     {defaultLocations.map((loc) => (
                       <option key={loc} value={loc}>
@@ -302,7 +302,7 @@ export const Drawer: React.FC<DrawerProps> = ({
                           disabled={isView}
                           value={purchaseDate}
                           onChange={(e) => setPurchaseDate(e.target.value)}
-                          className="w-full p-2 border-2 border-on-background rounded-lg bg-white text-xs"
+                          className="w-full p-2 border-2 border-on-background rounded-lg bg-white text-xs relative z-10 cursor-pointer disabled:cursor-not-allowed disabled:opacity-75 disabled:bg-surface-container"
                         />
                       </div>
                       <div>
@@ -312,7 +312,7 @@ export const Drawer: React.FC<DrawerProps> = ({
                           disabled={isView}
                           value={expiryDate}
                           onChange={(e) => setExpiryDate(e.target.value)}
-                          className="w-full p-2 border-2 border-on-background rounded-lg bg-white text-xs border-dashed"
+                          className="w-full p-2 border-2 border-on-background rounded-lg bg-white text-xs border-dashed relative z-10 cursor-pointer disabled:cursor-not-allowed disabled:opacity-75 disabled:bg-surface-container"
                         />
                       </div>
                     </div>
@@ -329,7 +329,7 @@ export const Drawer: React.FC<DrawerProps> = ({
                         disabled={isView}
                         value={remindDays}
                         onChange={(e) => setRemindDays(Number(e.target.value))}
-                        className="w-full accent-primary bg-surface-container"
+                        className="w-full accent-primary bg-surface-container relative z-10 cursor-pointer disabled:cursor-not-allowed"
                       />
                     </div>
                   </div>
