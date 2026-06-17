@@ -77,6 +77,12 @@ class ChatResult(BaseModel):
     operations: list[ChatOperation] = Field(default_factory=list)
     itemSuggestion: dict[str, Any] | None = None
     needsConfirmation: bool = False
+    pendingId: str | None = None
+
+
+class ConfirmRequest(BaseModel):
+    pendingId: str
+    items: list[Item]
 
 
 class FrontendInventoryItem(BaseModel):
