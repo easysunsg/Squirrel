@@ -1,7 +1,7 @@
 import re
 from datetime import date, timedelta
 
-from app.models.schemas import ChatOperation, ChatResult, Item
+from app.models.schemas import ChatOperation, ChatResult, InventoryCategory, Item
 
 
 SPACE_KEYWORDS = {
@@ -33,17 +33,42 @@ def guess_space(text: str) -> tuple[str, str]:
     return "kitchen", "主厨房"
 
 
+def guess_category(title: str) -> InventoryCategory:
+    """Guess the inventory category based on item title."""
+    if re.search(r"蛋|奶|肉|菜|果|面包|米|面|水|饮|酒|茶|豆|酱|醋|油|糖|粉|料", title):
+        return "food"
+    if re.search(r"药|维C|维生素|感冒|消炎|止痛|胶囊", title):
+        return "medicine"
+    if re.search(r"沐浴|洗发|洗面|洁面|香皂|皂|牙膏|牙刷|护肤|化妆品|洁", title):
+        return "cosmetics"
+    if re.search(r"书|本|杂志|册|字典|刊", title):
+        return "book"
+    if re.search(r"电器|充电|电池|灯|开关|线|插头|适配器|充电器", title):
+        return "electronics"
+    return "other"
+
+
 def guess_icon(title: str, space_name: str) -> str:
     if space_name == "车库工具":
         return "construction"
     if re.search(r"药|维|感冒", title):
         return "medication"
-    if re.search(r"面包|吐司", title):
+    if re.search(r"面包|吐司|蛋", title):
         return "bakery_dining"
     if re.search(r"咖啡", title):
         return "local_cafe"
+    if re.search(r"奶|牛奶|酸奶", title):
+        return "local_drink"
+    if re.search(r"肉|鸡肉|猪肉|牛肉", title):
+        return "restaurant"
+    if re.search(r"蔬|菜|果|水果|苹果|香蕉", title):
+        return "spa"
     if re.search(r"洗洁|沐浴|清洁", title):
         return "cleaning_services"
+    if re.search(r"水|饮料|果汁|酒|茶", title):
+        return "water_drop"
+    if re.search(r"米|面|粉|粮|螺蛳粉", title):
+        return "grain"
     return "package_2"
 
 
@@ -61,6 +86,52 @@ def normalize_tag(remaining: int) -> str:
     if remaining < 50:
         return "较低"
     return "充足"
+
+
+CHINESE_NUMERALS: dict[str, int] = {
+    "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+    "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+}
+
+
+def chinese_numeral_to_int(text: str) -> tuple[int, str] | None:
+    """Convert a Chinese numeral prefix to an integer and return the remaining text.
+
+    Supports single digits (一~九, 两) and compound forms (十~十九, 二十~九十).
+    Returns (count, remainder) or None if no Chinese numeral is found.
+    """
+    if not text or text[0] not in CHINESE_NUMERALS and text[0] != "十":
+        return None
+
+    count = 0
+
+    # Two-character compound: 二十, 三十, ..., 九十
+    if len(text) >= 2 and text[0] in {"二", "三", "四", "五", "六", "七", "八", "九"} and text[1] == "十":
+        tens = CHINESE_NUMERALS[text[0]]
+        count = tens * 10
+        text = text[2:]
+        # Optional trailing digit: 二十一, 三十二, etc.
+        if text and text[0] in CHINESE_NUMERALS:
+            count += CHINESE_NUMERALS[text[0]]
+            text = text[1:]
+        return count, text
+
+    # 十 ~ 十九
+    if text[0] == "十":
+        count = 10
+        text = text[1:]
+        if text and text[0] in CHINESE_NUMERALS:
+            count += CHINESE_NUMERALS[text[0]]
+            text = text[1:]
+        return count, text
+
+    # Single digit
+    if text[0] in CHINESE_NUMERALS:
+        count = CHINESE_NUMERALS[text[0]]
+        text = text[1:]
+        return count, text
+
+    return None
 
 
 def extract_target_title(text: str) -> str | None:
@@ -131,10 +202,10 @@ def infer_search_terms(text: str) -> list[str]:
 
 def parse_lightning_text(text: str) -> list[Item]:
     space_id, space_name = guess_space(text)
-    location_match = re.search(r"放(?:在|进|到)?(.+?)(?:里|中|$)", text)
+    location_match = re.search(r"放(?:在|进|到)?了?(.+?)(?:里|中|$)", text)
     location = location_match.group(1).strip(" ，,。") if location_match else "默认层架"
     item_text = re.sub(r"(?:，|,)?\s*(?:都)?放(?:在|进|到)?.*$", "", text)
-    item_text = re.sub(r"^(我今天|刚刚|刚才)?\s*(买了|购入|新增|存入|录入|添加)", "", item_text).strip() or text
+    item_text = re.sub(r"^(?:我今天|今天|刚刚|刚才)?\s*(买了|购入|新增|存入|录入|添加)", "", item_text).strip() or text
     parts = [part.strip() for part in re.split(r"[、和]", item_text) if part.strip()]
 
     consumed = bool(re.search(r"吃完|用完|扔|坏了|清掉|消耗", text))
@@ -142,14 +213,36 @@ def parse_lightning_text(text: str) -> list[Item]:
 
     items: list[Item] = []
     for part in parts:
-        match = re.match(r"^(\d+)\s*(袋|瓶|盒|个|件|包|罐|本|条|把|颗|斤|克|g|kg)?\s*(.+)$", part, re.I)
-        count = int(match.group(1)) if match else 1
-        unit = match.group(2) if match and match.group(2) else ("件" if space_name == "车库工具" else "个")
-        title = (match.group(3) if match else part).strip()
+        unit_pattern = r"(袋|瓶|盒|个|件|包|罐|本|条|把|颗|斤|克|g|kg)"
+        match = re.match(rf"^(\d+)\s*{unit_pattern}?\s*(.+)$", part, re.I)
+
+        if match:
+            count = int(match.group(1))
+            unit = match.group(2) if match.group(2) else ("件" if space_name == "车库工具" else "个")
+            title = match.group(3).strip()
+        else:
+            # Try Chinese numeral prefix: "两盒牛奶", "五袋大米"
+            cn_result = chinese_numeral_to_int(part)
+            if cn_result:
+                count, remainder = cn_result
+                unit_match = re.match(rf"^\s*{unit_pattern}?\s*(.+)$", remainder, re.I)
+                unit = unit_match.group(1) if unit_match and unit_match.group(1) else ("件" if space_name == "车库工具" else "个")
+                title = unit_match.group(2).strip() if unit_match and unit_match.group(2) else remainder.strip()
+            else:
+                count = 1
+                unit = "件" if space_name == "车库工具" else "个"
+                title = part.strip()
+
+        # Remove trailing location/noise after punctuation
+        title = re.sub(r"[，,。．、]+.*$", "", title).strip()
+        if not title:
+            title = part.strip()
         tag = normalize_tag(remaining)
+        category = guess_category(title)
         items.append(
             Item(
                 title=title,
+                category=category,
                 spaceId=space_id,
                 spaceName=space_name,
                 location=location,
