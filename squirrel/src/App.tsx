@@ -10,13 +10,14 @@ import {
 } from "lucide-react";
 import { ChatTab } from "./components/ChatTab";
 import { ConfirmModal } from "./components/ConfirmModal";
+import { ConsumeConfirmModal } from "./components/ConsumeConfirmModal";
 import { DashboardTab } from "./components/DashboardTab";
 import { Drawer } from "./components/Drawer";
 import { InventoryTab } from "./components/InventoryTab";
 import { Onboarding } from "./components/Onboarding";
 import { SettingsTab } from "./components/SettingsTab";
 import SquirrelLogo from "./components/SquirrelLogo";
-import { AppSettings, ChatApiResponse, ChatMessage, DrawerActionType, InventoryCategory, InventoryItem, PendingItem } from "./types";
+import { AppSettings, ChatApiResponse, ChatMessage, ConsumeConfirmState, DrawerActionType, InventoryCategory, InventoryItem, PendingItem } from "./types";
 import { DEFAULT_INVENTORY_ITEMS } from "./utils";
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -222,6 +223,7 @@ export default function App() {
     pendingId: string;
     items: PendingItem[];
   } | null>(null);
+  const [consumeConfirm, setConsumeConfirm] = useState<ConsumeConfirmState | null>(null);
 
   useEffect(() => {
     const loadInitialState = async () => {
@@ -410,6 +412,22 @@ export default function App() {
         return;
       }
 
+      // Handle consume confirmation — show candidate selection modal
+      if (data.needsConfirmation && data.pendingId && Array.isArray(data.itemSuggestion?.matches)) {
+        setConsumeConfirm({
+          pendingId: data.pendingId,
+          candidates: data.itemSuggestion.matches,
+          consumeAll: data.itemSuggestion.consumeAll ?? false,
+          replyText: data.reply || "请选择要操作的物品。",
+        });
+        if (Array.isArray(data.messages)) {
+          setMessages(normalizeMessageList(data.messages));
+        } else if (data.reply) {
+          appendChatMessage(createChatMessage("assistant", data.reply, data.itemSuggestion));
+        }
+        return;
+      }
+
       if (Array.isArray(data.messages)) {
         setMessages(normalizeMessageList(data.messages));
         return;
@@ -456,6 +474,40 @@ export default function App() {
     } catch (error) {
       console.error("Failed to confirm items", error);
       setChatError("确认入库失败，请重试。");
+    }
+  };
+
+  const handleConsumeConfirm = async (
+    pendingId: string,
+    selectedIndex: number,
+    consumeAll: boolean,
+    count?: number
+  ) => {
+    setChatError(null);
+    try {
+      const response = await fetch("/api/chat/consume-confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pendingId, selectedIndex, consumeAll, count }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.detail || `Consume confirm failed: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (Array.isArray(data.items)) {
+        const serverItems = normalizeServerItems(data.items);
+        saveItemsToStorage(serverItems);
+      }
+      if (Array.isArray(data.messages)) {
+        setMessages(normalizeMessageList(data.messages));
+      }
+      setConsumeConfirm(null);
+    } catch (error) {
+      console.error("Failed to confirm consume", error);
+      setChatError("确认消耗失败，请重试。");
     }
   };
 
@@ -666,6 +718,17 @@ export default function App() {
                     items={pendingConfirm.items}
                     onConfirm={handleConfirmItems}
                     onCancel={() => setPendingConfirm(null)}
+                  />
+                )}
+                {consumeConfirm && (
+                  <ConsumeConfirmModal
+                    isOpen
+                    pendingId={consumeConfirm.pendingId}
+                    candidates={consumeConfirm.candidates}
+                    consumeAll={consumeConfirm.consumeAll}
+                    replyText={consumeConfirm.replyText}
+                    onConfirm={handleConsumeConfirm}
+                    onCancel={() => setConsumeConfirm(null)}
                   />
                 )}
               </>

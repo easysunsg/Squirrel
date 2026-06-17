@@ -110,6 +110,19 @@ def add_node(state: SquirrelGraphState) -> SquirrelGraphState:
     return {"chat_result": chat_result}
 
 
+def _match_items_3tier(inventory: list[Item], target: str | None) -> list[Item]:
+    """3-tier matching: exact → substring → location/space."""
+    if not target:
+        return []
+    exact = [item for item in inventory if item.title == target]
+    if exact:
+        return exact
+    partial = [item for item in inventory if target in item.title or item.title in target]
+    if partial:
+        return partial
+    return [item for item in inventory if target in item.location or target in item.spaceName]
+
+
 def consume_node(state: SquirrelGraphState) -> SquirrelGraphState:
     text = state.get("text", "")
     operations = state["chat_result"].operations
@@ -117,15 +130,32 @@ def consume_node(state: SquirrelGraphState) -> SquirrelGraphState:
     if not operations:
         return {"chat_result": ChatResult(intent="consume", replyText="我没识别到要消耗的物品。")}
     target = operations[0].target
-    item = next((candidate for candidate in inventory if target and target in candidate.title), None)
-    if not item:
+    candidates = _match_items_3tier(inventory, target)
+
+    if not candidates:
         return {
             "chat_result": ChatResult(
                 intent="consume",
                 replyText="我暂时没找到对应物品，请说得更具体一点。",
                 needsConfirmation=True,
+                itemSuggestion={"matches": [], "consumeAll": operations[0].consumeAll},
             )
         }
+
+    if len(candidates) > 1:
+        return {
+            "chat_result": ChatResult(
+                intent="consume",
+                replyText=f"找到 {len(candidates)} 个候选物品，请选择要操作的那个。",
+                needsConfirmation=True,
+                itemSuggestion={
+                    "matches": [item.model_dump() for item in candidates[:6]],
+                    "consumeAll": operations[0].consumeAll,
+                },
+            )
+        }
+
+    item = candidates[0]
     patch = extract_remaining_patch(text, item)
     if not patch:
         patch = {"remainingPct": 0, "count": 0}

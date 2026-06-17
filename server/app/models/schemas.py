@@ -85,6 +85,13 @@ class ConfirmRequest(BaseModel):
     items: list[Item]
 
 
+class ConsumeConfirmRequest(BaseModel):
+    pendingId: str
+    selectedIndex: int = 0
+    consumeAll: bool = False
+    count: int | None = None
+
+
 class FrontendInventoryItem(BaseModel):
     id: str
     name: str

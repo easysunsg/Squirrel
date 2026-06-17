@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Check, X, Package, Minus, Plus } from "lucide-react";
-import { PendingItem } from "../types";
+import { PendingItem, InventoryCategory } from "../types";
+import { CATEGORY_MAP } from "../utils";
 
 interface ConfirmModalProps {
   isOpen: boolean;
@@ -25,6 +26,12 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
   React.useEffect(() => {
     setEditItems(items);
   }, [items]);
+
+  const updateItem = (index: number, field: keyof PendingItem, value: string | number) => {
+    setEditItems((prev) =>
+      prev.map((item, i) => (i === index ? { ...item, [field]: value } : item))
+    );
+  };
 
   const updateCount = (index: number, delta: number) => {
     setEditItems((prev) =>
@@ -97,29 +104,19 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
                   {editItems.map((item, index) => (
                     <div
                       key={index}
-                      className="bg-surface border-2 border-on-background rounded-2xl p-4 shadow-[2px_3px_0_0_#1b1c1c]"
+                      className="bg-surface border-2 border-on-background rounded-2xl p-4 shadow-[2px_3px_0_0_#1b1c1c] space-y-2.5"
                     >
+                      {/* Title + Count row */}
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
-                          <p className="font-display font-bold text-sm text-on-background truncate">
-                            {item.title}
-                          </p>
-                          <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5 text-xs text-outline">
-                            {item.category && (
-                              <span>分类：{item.category}</span>
-                            )}
-                            {item.location && (
-                              <span>位置：{item.location}</span>
-                            )}
-                            {item.expireDate && (
-                              <span>到期：{item.expireDate}</span>
-                            )}
-                          </div>
-                          {item.remark && (
-                            <p className="text-xs text-outline mt-1 truncate">
-                              备注：{item.remark}
-                            </p>
-                          )}
+                          <input
+                            type="text"
+                            value={item.title}
+                            onChange={(e) => updateItem(index, "title", e.target.value)}
+                            disabled={isConfirming}
+                            className="w-full font-display font-bold text-sm text-on-background bg-white border-2 border-on-background rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
+                            placeholder="物品名称"
+                          />
                         </div>
 
                         {/* Count adjuster */}
@@ -144,6 +141,61 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
                           <span className="text-xs text-outline ml-0.5">
                             {item.unit}
                           </span>
+                        </div>
+                      </div>
+
+                      {/* Category & Location row */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] text-outline mb-0.5 block">分类</label>
+                          <select
+                            value={item.category}
+                            onChange={(e) => updateItem(index, "category", e.target.value)}
+                            disabled={isConfirming}
+                            className="w-full text-xs p-1.5 border-2 border-on-background rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer disabled:opacity-60"
+                          >
+                            {Object.entries(CATEGORY_MAP).map(([key, meta]) => (
+                              <option key={key} value={key}>
+                                {meta.chineseName}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-outline mb-0.5 block">位置</label>
+                          <input
+                            type="text"
+                            value={item.location}
+                            onChange={(e) => updateItem(index, "location", e.target.value)}
+                            disabled={isConfirming}
+                            className="w-full text-xs p-1.5 border-2 border-on-background rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
+                            placeholder="存放位置"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Expire date & Remark row */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] text-outline mb-0.5 block">到期时间</label>
+                          <input
+                            type="date"
+                            value={item.expireDate || ""}
+                            onChange={(e) => updateItem(index, "expireDate", e.target.value)}
+                            disabled={isConfirming}
+                            className="w-full text-xs p-1.5 border-2 border-on-background rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer disabled:opacity-60"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-outline mb-0.5 block">备注</label>
+                          <input
+                            type="text"
+                            value={item.remark || ""}
+                            onChange={(e) => updateItem(index, "remark", e.target.value)}
+                            disabled={isConfirming}
+                            className="w-full text-xs p-1.5 border-2 border-on-background rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
+                            placeholder="备注信息"
+                          />
                         </div>
                       </div>
                     </div>

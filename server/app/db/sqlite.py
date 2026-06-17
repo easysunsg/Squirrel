@@ -183,6 +183,12 @@ def init_db() -> None:
         if "item_suggestion" not in message_columns:
             conn.execute("ALTER TABLE messages ADD COLUMN item_suggestion TEXT")
 
+        pending_columns = {row["name"] for row in conn.execute("PRAGMA table_info(pending_confirmation)").fetchall()}
+        if "type" not in pending_columns:
+            conn.execute("ALTER TABLE pending_confirmation ADD COLUMN type TEXT NOT NULL DEFAULT 'add'")
+        if "context" not in pending_columns:
+            conn.execute("ALTER TABLE pending_confirmation ADD COLUMN context TEXT")
+
         if conn.execute("SELECT COUNT(*) FROM spaces").fetchone()[0] == 0:
             replace_spaces(conn, DEFAULT_SPACES)
         if conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0:
@@ -417,8 +423,8 @@ def create_pending_confirmation(conn: sqlite3.Connection, items: list[Item]) -> 
     from datetime import datetime
     pending_id = f"pending-{uuid4().hex[:12]}"
     conn.execute(
-        "INSERT INTO pending_confirmation(id, items, created_at) VALUES(?, ?, ?)",
-        (pending_id, json.dumps([item.model_dump() for item in items], ensure_ascii=False), datetime.now().isoformat()),
+        "INSERT INTO pending_confirmation(id, items, type, created_at) VALUES(?, ?, ?, ?)",
+        (pending_id, json.dumps([item.model_dump() for item in items], ensure_ascii=False), "add", datetime.now().isoformat()),
     )
     return pending_id
 
@@ -450,3 +456,38 @@ def cleanup_expired_pending(conn: sqlite3.Connection, ttl_minutes: int = 30) -> 
     cutoff = (datetime.now() - timedelta(minutes=ttl_minutes)).isoformat()
     cur = conn.execute("DELETE FROM pending_confirmation WHERE created_at < ?", (cutoff,))
     return cur.rowcount
+
+
+def create_pending_consume(conn: sqlite3.Connection, candidates: list[Item], context: dict) -> str:
+    from datetime import datetime
+    pending_id = f"consume-{uuid4().hex[:12]}"
+    conn.execute(
+        "INSERT INTO pending_confirmation(id, items, type, context, created_at) VALUES(?, ?, ?, ?, ?)",
+        (
+            pending_id,
+            json.dumps([item.model_dump() for item in candidates], ensure_ascii=False),
+            "consume",
+            json.dumps(context, ensure_ascii=False),
+            datetime.now().isoformat(),
+        ),
+    )
+    return pending_id
+
+
+def get_pending_consume(conn: sqlite3.Connection, pending_id: str) -> tuple[list[Item], dict] | None:
+    row = conn.execute(
+        "SELECT items, type, context, created_at FROM pending_confirmation WHERE id = ?",
+        (pending_id,),
+    ).fetchone()
+    if not row:
+        return None
+    if row["type"] != "consume":
+        return None
+    from datetime import datetime, timedelta
+    created = datetime.fromisoformat(row["created_at"])
+    if datetime.now() - created > timedelta(minutes=30):
+        conn.execute("DELETE FROM pending_confirmation WHERE id = ?", (pending_id,))
+        return None
+    candidates = [Item.model_validate(item) for item in json.loads(row["items"])]
+    context = json.loads(row["context"]) if row["context"] else {}
+    return candidates, context

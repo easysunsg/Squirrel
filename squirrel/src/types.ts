@@ -56,6 +56,7 @@ export interface ChatApiResponse {
     pendingId?: string;
     items?: PendingItem[];
     matches?: Array<Record<string, unknown>>;
+    consumeAll?: boolean;
   };
   messages?: ChatMessage[];
   items?: unknown[];
@@ -64,3 +65,20 @@ export interface ChatApiResponse {
 }
 
 export type DrawerActionType = 'view' | 'edit' | 'create';
+
+export interface ConsumeCandidate {
+  id?: string;
+  title: string;
+  spaceName: string;
+  location: string;
+  count: number;
+  unit: string;
+  remainingPct: number;
+}
+
+export interface ConsumeConfirmState {
+  pendingId: string;
+  candidates: ConsumeCandidate[];
+  consumeAll: boolean;
+  replyText: string;
+}
