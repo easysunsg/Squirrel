@@ -16,6 +16,17 @@ export interface InventoryItem {
 
 export type SquirrelPersonality = 'humorous' | 'gabby' | 'gentle' | 'strict_squirrel';
 
+export interface PendingItem {
+  title: string;
+  count: number;
+  unit: string;
+  category: InventoryCategory;
+  location: string;
+  spaceName?: string;
+  expireDate?: string;
+  remark?: string;
+}
+
 export interface AppSettings {
   onboardingComplete: boolean;
   selectedLocations: string[];
@@ -31,14 +42,25 @@ export interface ChatMessage {
   sender: 'user' | 'assistant';
   text: string;
   timestamp: string;
-  itemSuggestion?: Partial<InventoryItem>; // AI returned recognition suggestions
+  itemSuggestion?: {
+    pendingId?: string;
+    items?: PendingItem[];
+    matches?: Array<Record<string, unknown>>;
+    [key: string]: unknown;
+  };
 }
 
 export interface ChatApiResponse {
   reply?: string;
-  itemSuggestion?: Partial<InventoryItem>;
+  itemSuggestion?: {
+    pendingId?: string;
+    items?: PendingItem[];
+    matches?: Array<Record<string, unknown>>;
+  };
   messages?: ChatMessage[];
   items?: unknown[];
+  needsConfirmation?: boolean;
+  pendingId?: string;
 }
 
 export type DrawerActionType = 'view' | 'edit' | 'create';
