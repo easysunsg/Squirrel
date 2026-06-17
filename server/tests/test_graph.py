@@ -29,3 +29,43 @@ def test_graph_routes_search_query():
 
     assert result["chat_result"].intent == "location_query"
     assert "感冒药" in result["chat_result"].replyText
+
+
+from app.db.sqlite import connect, create_pending_confirmation, get_pending_confirmation, delete_pending_confirmation, cleanup_expired_pending
+from uuid import uuid4
+
+
+def test_create_and_get_pending():
+    items = [Item(title="青椒", count=7, unit="个")]
+    with connect() as conn:
+        pending_id = create_pending_confirmation(conn, items)
+        got = get_pending_confirmation(conn, pending_id)
+    assert got is not None
+    assert len(got) == 1
+    assert got[0].title == "青椒"
+    assert got[0].count == 7
+
+
+def test_get_nonexistent_pending():
+    with connect() as conn:
+        got = get_pending_confirmation(conn, "pending-nonexistent")
+    assert got is None
+
+
+def test_delete_pending():
+    items = [Item(title="牙膏", count=2)]
+    with connect() as conn:
+        pending_id = create_pending_confirmation(conn, items)
+        deleted = delete_pending_confirmation(conn, pending_id)
+    assert deleted is True
+
+
+def test_cleanup_expired_pending():
+    with connect() as conn:
+        pending_id = f"pending-{uuid4().hex[:12]}"
+        conn.execute(
+            "INSERT INTO pending_confirmation(id, items, created_at) VALUES(?, ?, ?)",
+            (pending_id, "[]", "2020-01-01"),
+        )
+        cleaned = cleanup_expired_pending(conn, ttl_minutes=30)
+    assert cleaned >= 1

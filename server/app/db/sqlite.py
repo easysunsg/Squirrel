@@ -162,6 +162,12 @@ def init_db() -> None:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS pending_confirmation (
+                id TEXT PRIMARY KEY,
+                items TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
             """
         )
 
@@ -405,3 +411,42 @@ def replace_state(conn: sqlite3.Connection, state: AppState) -> AppState:
     set_preferences(conn, state.preferences)
     set_onboarding_done(conn, state.onboardingDone)
     return get_state(conn)
+
+
+def create_pending_confirmation(conn: sqlite3.Connection, items: list[Item]) -> str:
+    from datetime import datetime
+    pending_id = f"pending-{uuid4().hex[:12]}"
+    conn.execute(
+        "INSERT INTO pending_confirmation(id, items, created_at) VALUES(?, ?, ?)",
+        (pending_id, json.dumps([item.model_dump() for item in items], ensure_ascii=False), datetime.now().isoformat()),
+    )
+    return pending_id
+
+
+def get_pending_confirmation(conn: sqlite3.Connection, pending_id: str) -> list[Item] | None:
+    row = conn.execute(
+        "SELECT items, created_at FROM pending_confirmation WHERE id = ?",
+        (pending_id,),
+    ).fetchone()
+    if not row:
+        return None
+    # 惰性清理：超过 30 分钟视为过期
+    from datetime import datetime, timedelta
+    created = datetime.fromisoformat(row["created_at"])
+    if datetime.now() - created > timedelta(minutes=30):
+        conn.execute("DELETE FROM pending_confirmation WHERE id = ?", (pending_id,))
+        return None
+    data = json.loads(row["items"])
+    return [Item.model_validate(item) for item in data]
+
+
+def delete_pending_confirmation(conn: sqlite3.Connection, pending_id: str) -> bool:
+    cur = conn.execute("DELETE FROM pending_confirmation WHERE id = ?", (pending_id,))
+    return cur.rowcount > 0
+
+
+def cleanup_expired_pending(conn: sqlite3.Connection, ttl_minutes: int = 30) -> int:
+    from datetime import datetime, timedelta
+    cutoff = (datetime.now() - timedelta(minutes=ttl_minutes)).isoformat()
+    cur = conn.execute("DELETE FROM pending_confirmation WHERE created_at < ?", (cutoff,))
+    return cur.rowcount
