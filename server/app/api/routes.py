@@ -1,4 +1,5 @@
 import logging
+import uuid
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -283,7 +284,7 @@ def chat(request: ChatRequest):
         chat_result, updated_items, deleted_ids = execute_chat_operations(chat_result, conn, inventory)
         full_history = history.copy()
         assistant_message = Message(
-            id=f"msg-ai-{len(history) + 1}",
+            id=f"msg-ai-{uuid.uuid4().hex[:8]}",
             sender="assistant",
             text=chat_result.replyText,
             timestamp="刚刚",

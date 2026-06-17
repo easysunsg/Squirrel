@@ -328,7 +328,7 @@ def replace_messages(conn: sqlite3.Connection, messages: list[Message]) -> None:
         item_suggestion = json.dumps(message.itemSuggestion, ensure_ascii=False) if message.itemSuggestion else None
         conn.execute(
             """
-            INSERT INTO messages(
+            REPLACE INTO messages(
                 id, sender, text, timestamp, type, voice_duration, action_card, item_suggestion
             )
             VALUES(?, ?, ?, ?, ?, ?, ?, ?)
