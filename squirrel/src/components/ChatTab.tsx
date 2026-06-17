@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
-import { Send, Trash2, Plus, Sparkles, MessageSquare } from "lucide-react";
+import { Send, Trash2, Plus, Sparkles, MessageSquare, Loader2 } from "lucide-react";
 import { AppSettings, ChatMessage, InventoryItem } from "../types";
 
 interface ChatProps {
@@ -171,7 +171,7 @@ export const ChatTab: React.FC<ChatProps> = ({
               className="px-4 bg-primary text-white border-2 border-on-background rounded-xl hover:bg-opacity-95 active-press disabled:opacity-50 disabled:pointer-events-none"
               title="发送"
             >
-              {isSendingMessage ? <span className="text-xs font-bold">发送中</span> : <Send size={18} />}
+              {isSendingMessage ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
             </button>
           </div>
         </div>
