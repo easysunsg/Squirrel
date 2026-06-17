@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { InventoryItem, AppSettings } from "../types";
+import SquirrelLogo from "./SquirrelLogo";
 import { getItemStatus, CATEGORY_MAP } from "../utils";
 import { motion } from "motion/react";
 import {
@@ -84,7 +85,7 @@ export const DashboardTab: React.FC<DashboardProps> = ({
         className="bg-white border-[3px] border-on-background shadow-[6px_8px_0_0_#1b1c1c] p-5 md:p-6 rounded-[34px] flex flex-col md:flex-row items-center gap-5 relative overflow-hidden"
       >
         <div className="absolute top-0 right-0 w-24 h-24 bg-primary opacity-5 rounded-full pointer-events-none" />
-        <span className="text-5xl md:text-6xl shrink-0 animate-bounce rounded-full bg-primary text-white w-16 h-16 flex items-center justify-center border-2 border-on-background">🐿️</span>
+        <span className="shrink-0 animate-bounce rounded-full bg-primary text-white w-16 h-16 flex items-center justify-center border-2 border-on-background"><SquirrelLogo size={44} /></span>
         <div className="text-center md:text-left space-y-1.5 flex-1 select-none">
           <div className="bg-primary text-white text-[10px] font-bold px-3 py-1 rounded-full inline-block mb-1 border-2 border-on-background">
             {settings.squirrelPersonality === "humorous" && "🌰 金牌松鼠大管家"}

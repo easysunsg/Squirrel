@@ -41,7 +41,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
 
   // Preset arrays
   const presetHabits = [
-    "海鲜过敏 🦐", "无乳糖 🥛", "轻食主义 🥬", "拒绝浪费 🍎",
+    "海鲜过敏 🦐", "乳糖不耐受🥛", "轻食主义 🥬", "拒绝浪费 🍎",
     "懒人速食 🍜", "零食控 🍫", "素食者 🥗", "辛辣重度 🌶️",
     "按期清理强迫症 🧹"
   ];

@@ -9,12 +9,14 @@ import {
   X,
 } from "lucide-react";
 import { ChatTab } from "./components/ChatTab";
+import { ConfirmModal } from "./components/ConfirmModal";
 import { DashboardTab } from "./components/DashboardTab";
 import { Drawer } from "./components/Drawer";
 import { InventoryTab } from "./components/InventoryTab";
 import { Onboarding } from "./components/Onboarding";
 import { SettingsTab } from "./components/SettingsTab";
-import { AppSettings, ChatApiResponse, ChatMessage, DrawerActionType, InventoryCategory, InventoryItem } from "./types";
+import SquirrelLogo from "./components/SquirrelLogo";
+import { AppSettings, ChatApiResponse, ChatMessage, DrawerActionType, InventoryCategory, InventoryItem, PendingItem } from "./types";
 import { DEFAULT_INVENTORY_ITEMS } from "./utils";
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -216,6 +218,10 @@ export default function App() {
   const [drawerAction, setDrawerAction] = useState<DrawerActionType>("view");
   const [selectedDrawerItem, setSelectedDrawerItem] = useState<InventoryItem | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    pendingId: string;
+    items: PendingItem[];
+  } | null>(null);
 
   useEffect(() => {
     const loadInitialState = async () => {
@@ -390,6 +396,20 @@ export default function App() {
         saveItemsToStorage(serverItems);
       }
 
+      // Handle needsConfirmation — show confirm modal, don't persist items yet
+      if (data.needsConfirmation && data.pendingId && data.itemSuggestion?.items) {
+        setPendingConfirm({
+          pendingId: data.pendingId,
+          items: data.itemSuggestion.items,
+        });
+        if (Array.isArray(data.messages)) {
+          setMessages(normalizeMessageList(data.messages));
+        } else if (data.reply) {
+          appendChatMessage(createChatMessage("assistant", data.reply, data.itemSuggestion));
+        }
+        return;
+      }
+
       if (Array.isArray(data.messages)) {
         setMessages(normalizeMessageList(data.messages));
         return;
@@ -407,6 +427,35 @@ export default function App() {
       setMessages([...nextMessages, createFallbackReply(text, settings, items)]);
     } finally {
       setIsSendingMessage(false);
+    }
+  };
+
+  const handleConfirmItems = async (pendingId: string, confirmedItems: PendingItem[]) => {
+    setChatError(null);
+    try {
+      const response = await fetch("/api/chat/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pendingId, items: confirmedItems }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.detail || `Confirm failed: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (Array.isArray(data.items)) {
+        const serverItems = normalizeServerItems(data.items);
+        saveItemsToStorage(serverItems);
+      }
+      if (Array.isArray(data.messages)) {
+        setMessages(normalizeMessageList(data.messages));
+      }
+      setPendingConfirm(null);
+    } catch (error) {
+      console.error("Failed to confirm items", error);
+      setChatError("确认入库失败，请重试。");
     }
   };
 
@@ -474,7 +523,7 @@ export default function App() {
       <aside className="hidden md:flex w-64 shrink-0 flex-col justify-between border-r-4 border-on-background bg-white p-5">
         <div className="space-y-6">
           <div className="flex items-center gap-2">
-            <span className="text-4xl">🐿️</span>
+            <SquirrelLogo size={40} />
             <div>
               <h1 className="font-display text-lg font-medium leading-none">松鼠筑巢</h1>
               <p className="mt-1 text-[10px] uppercase tracking-wide text-outline">Smart Home Nest</p>
@@ -511,7 +560,7 @@ export default function App() {
 
       <header className="sticky top-0 z-30 flex items-center justify-between border-b-2 border-on-background bg-white p-4 md:hidden">
         <div className="flex items-center gap-2">
-          <span className="text-3xl">🐿️</span>
+          <SquirrelLogo size={32} />
           <div>
             <h1 className="text-[15px] font-display font-medium leading-none">松鼠筑巢</h1>
             <p className="text-[9px] text-outline">聊天与库存助手</p>
@@ -594,21 +643,32 @@ export default function App() {
             )}
 
             {activeTab === "chat" && (
-              <ChatTab
-                settings={settings}
-                items={items}
-                preinput={chatPreinput}
-                onClearPreinput={() => setChatPreinput("")}
-                onSaveNewItem={handleSaveItem}
-                onSendMessage={handleSendChatMessage}
-                onAppendLocalMessage={appendChatMessage}
-                onClearChatHistory={() => {
-                  void handleClearChatHistory();
-                }}
-                messages={messages}
-                isSendingMessage={isSendingMessage}
-                chatError={chatError}
-              />
+              <>
+                <ChatTab
+                  settings={settings}
+                  items={items}
+                  preinput={chatPreinput}
+                  onClearPreinput={() => setChatPreinput("")}
+                  onSaveNewItem={handleSaveItem}
+                  onSendMessage={handleSendChatMessage}
+                  onAppendLocalMessage={appendChatMessage}
+                  onClearChatHistory={() => {
+                    void handleClearChatHistory();
+                  }}
+                  messages={messages}
+                  isSendingMessage={isSendingMessage}
+                  chatError={chatError}
+                />
+                {pendingConfirm && (
+                  <ConfirmModal
+                    isOpen
+                    pendingId={pendingConfirm.pendingId}
+                    items={pendingConfirm.items}
+                    onConfirm={handleConfirmItems}
+                    onCancel={() => setPendingConfirm(null)}
+                  />
+                )}
+              </>
             )}
 
             {activeTab === "settings" && (

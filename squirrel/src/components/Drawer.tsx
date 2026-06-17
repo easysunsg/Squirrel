@@ -3,6 +3,7 @@ import { InventoryItem, InventoryCategory } from "../types";
 import { CATEGORY_MAP } from "../utils";
 import { motion, AnimatePresence } from "motion/react";
 import { X, Save, Trash, Calendar, Plus, Bookmark, HelpCircle } from "lucide-react";
+import SquirrelLogo from "./SquirrelLogo";
 import { Modal } from "./Modal";
 
 interface DrawerProps {
@@ -164,7 +165,7 @@ export const Drawer: React.FC<DrawerProps> = ({
             {/* Header */}
             <div className="p-5 border-b-2 border-on-background bg-primary-fixed flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="text-2xl">🐿️</span>
+                <SquirrelLogo size={28} />
                 <div>
                   <h3 className="font-display font-bold text-on-background text-[17px]">
                     {action === "create" ? "新增小窝库存" : isView ? "看一眼松枝藏品" : "改写藏品档案"}

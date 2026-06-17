@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { AppSettings, SquirrelPersonality } from "../types";
+import SquirrelLogo from "./SquirrelLogo";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Home,
@@ -146,7 +147,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ settings, onSaveSettings
 
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
-            <span className="text-3xl">🐿️</span>
+            <SquirrelLogo size={32} />
             <div>
               <h1 className="font-display font-medium text-lg leading-none text-on-background">
                 松鼠筑巢
