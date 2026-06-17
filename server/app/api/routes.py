@@ -5,7 +5,10 @@ from fastapi import APIRouter, HTTPException, Query
 from app.core.config import settings
 from app.db.sqlite import (
     connect,
+    create_pending_confirmation,
     delete_item,
+    delete_pending_confirmation,
+    get_pending_confirmation,
     get_state,
     init_db,
     list_items,
@@ -14,7 +17,7 @@ from app.db.sqlite import (
     replace_state,
     upsert_item,
 )
-from app.models.schemas import AppState, ChatRequest, ChatResult, Item, Message, RecipeRequest, TextRequest
+from app.models.schemas import AppState, ChatRequest, ChatResult, ConfirmRequest, Item, Message, RecipeRequest, TextRequest
 from app.services.ai import ai_service
 from app.services.markdown import item_status, sync_inventory_markdown
 from app.services.vector_store import vector_store
@@ -70,12 +73,24 @@ def execute_chat_operations(chat_result: ChatResult, conn, inventory: list[Item]
     updated_items: list[Item] = []
     deleted_ids: list[str] = []
 
-    for operation in chat_result.operations:
-        if operation.type == "add" and operation.item:
-            created = upsert_item(conn, operation.item)
-            updated_items.append(created)
-            continue
+    # === 新增：拦截 add 操作，存 pending 不入库 ===
+    add_ops = [op for op in chat_result.operations if op.type == "add" and op.item]
+    if add_ops:
+        pending_items = [op.item for op in add_ops]
+        pending_id = create_pending_confirmation(conn, pending_items)
+        chat_result.needsConfirmation = True
+        chat_result.pendingId = pending_id
+        chat_result.itemSuggestion = {
+            "pendingId": pending_id,
+            "items": [item.model_dump() for item in pending_items],
+        }
+        chat_result.replyText = f"已识别出 {len(pending_items)} 件物品，请确认后再入库。"
+        non_add_ops = [op for op in chat_result.operations if op.type != "add"]
+        if not non_add_ops:
+            return chat_result, [], []
+        chat_result.operations = non_add_ops
 
+    for operation in chat_result.operations:
         candidates = match_items(inventory, operation.target)
         if not candidates:
             return (
@@ -278,6 +293,17 @@ def chat(request: ChatRequest):
         replace_messages(conn, full_history)
         state = get_state(conn)
 
+    # === 新增：有 pending 时不执行 sync_outputs ===
+    if chat_result.pendingId:
+        return {
+            "reply": chat_result.replyText,
+            "needsConfirmation": True,
+            "itemSuggestion": chat_result.itemSuggestion,
+            "pendingId": chat_result.pendingId,
+            "messages": full_history,
+            "items": state.items,
+        }
+
     if updated_items or deleted_ids:
         sync_inventory_markdown(state)
         if updated_items:
@@ -290,6 +316,43 @@ def chat(request: ChatRequest):
         "itemSuggestion": chat_result.itemSuggestion,
         "messages": full_history,
         "items": state.items,
+    }
+
+
+@router.post("/chat/confirm")
+def confirm_items(request: ConfirmRequest):
+    from uuid import uuid4
+
+    logger.info("Confirming pending items pendingId=%s count=%d", request.pendingId, len(request.items))
+    with connect() as conn:
+        pending = get_pending_confirmation(conn, request.pendingId)
+        if not pending:
+            raise HTTPException(status_code=404, detail="确认请求已过期或不存在，请重新输入。")
+
+        created = [upsert_item(conn, item) for item in request.items]
+        delete_pending_confirmation(conn, request.pendingId)
+        state = get_state(conn)
+
+    sync_inventory_markdown(state)
+    vector_store.upsert_items(created)
+
+    titles = "、".join(f"{item.title}×{item.count}" for item in created)
+    reply_text = f"确认入库，已新增 {len(created)} 件物品：{titles}。"
+    confirm_message = Message(
+        id=f"msg-confirm-{uuid4().hex[:8]}",
+        sender="assistant",
+        text=reply_text,
+        timestamp="刚刚",
+    )
+    with connect() as conn:
+        all_messages = list_messages(conn)
+        all_messages.append(confirm_message)
+        replace_messages(conn, all_messages)
+
+    return {
+        "ok": True,
+        "items": state.items,
+        "messages": all_messages + [confirm_message],
     }
 
 

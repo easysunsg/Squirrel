@@ -101,7 +101,13 @@ def route_by_intent(state: SquirrelGraphState) -> str:
 
 
 def add_node(state: SquirrelGraphState) -> SquirrelGraphState:
-    return {"chat_result": state["chat_result"]}
+    chat_result = state["chat_result"]
+    if chat_result.operations:
+        item_count = len([op for op in chat_result.operations if op.type == "add" and op.item])
+        if item_count > 0:
+            chat_result.needsConfirmation = True
+            chat_result.replyText = f"已识别出 {item_count} 件物品，请确认后再入库。"
+    return {"chat_result": chat_result}
 
 
 def consume_node(state: SquirrelGraphState) -> SquirrelGraphState:
