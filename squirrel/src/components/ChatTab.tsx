@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
-import { Send, Trash2, Plus, Sparkles, MessageSquare, Loader2 } from "lucide-react";
-import { AppSettings, ChatMessage, InventoryItem } from "../types";
+import { Send, Trash2, Plus, Sparkles, MessageSquare, Loader2, X } from "lucide-react";
+import { AppSettings, ChatMessage, ConsumeCandidate, InventoryItem } from "../types";
 
 interface ChatProps {
   settings: AppSettings;
@@ -15,6 +15,12 @@ interface ChatProps {
   messages: ChatMessage[];
   isSendingMessage: boolean;
   chatError?: string | null;
+  pendingConsume?: {
+    pendingId: string;
+    candidates: ConsumeCandidate[];
+    consumeAll: boolean;
+  } | null;
+  onCancelPendingConsume?: () => void;
 }
 
 export const ChatTab: React.FC<ChatProps> = ({
@@ -29,6 +35,8 @@ export const ChatTab: React.FC<ChatProps> = ({
   messages,
   isSendingMessage,
   chatError,
+  pendingConsume,
+  onCancelPendingConsume,
 }) => {
   const [inputText, setInputText] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -150,6 +158,37 @@ export const ChatTab: React.FC<ChatProps> = ({
         </div>
 
         <div className="p-4 border-t-2 border-on-background bg-white space-y-2">
+          {/* Pending consume quick selection buttons */}
+          {pendingConsume && (
+            <div className="flex flex-wrap gap-1.5 items-center">
+              {pendingConsume.candidates.map((candidate, index) => (
+                <button
+                  key={candidate.id || index}
+                  onClick={() => void onSendMessage(String(index + 1))}
+                  disabled={isSendingMessage}
+                  className="px-3 py-1.5 border-2 border-on-background rounded-full bg-[#ffe92e] hover:bg-[#ffd700] active-press-sm text-xs font-display font-bold text-on-background disabled:opacity-50"
+                >
+                  {index + 1}. {candidate.title}
+                </button>
+              ))}
+              {pendingConsume.consumeAll && (
+                <button
+                  onClick={() => void onSendMessage("全部")}
+                  disabled={isSendingMessage}
+                  className="px-3 py-1.5 border-2 border-on-background rounded-full bg-red-100 hover:bg-red-200 active-press-sm text-xs font-display font-bold text-red-700 disabled:opacity-50"
+                >
+                  全部清除
+                </button>
+              )}
+              <button
+                onClick={() => onCancelPendingConsume?.()}
+                className="p-1.5 border-2 border-on-background rounded-full bg-surface hover:bg-slate-200 active-press-sm disabled:opacity-50"
+                title="取消选择"
+              >
+                <X size={12} className="text-outline" />
+              </button>
+            </div>
+          )}
           {chatError && (
             <div className="rounded-xl border-2 border-orange-300 bg-orange-50 px-3 py-2 text-xs font-medium text-orange-700">
               {chatError}
@@ -162,7 +201,7 @@ export const ChatTab: React.FC<ChatProps> = ({
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleInputKeyDown}
               disabled={isSendingMessage}
-              placeholder="输入库存、收纳或临期提醒问题..."
+              placeholder={pendingConsume ? "输入序号选择物品，或输入其他内容取消..." : "输入库存、收纳或临期提醒问题..."}
               className="flex-1 p-3 border-2 border-on-background rounded-xl bg-surface text-sm focus:bg-white focus:outline-none disabled:opacity-60"
             />
             <button

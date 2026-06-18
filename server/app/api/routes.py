@@ -125,10 +125,17 @@ def execute_chat_operations(chat_result: ChatResult, conn, inventory: list[Item]
             if len(candidates) > 1:
                 context = {"consumeAll": operation.consumeAll, "patch": operation.patch}
                 pending_id = create_pending_consume(conn, candidates[:6], context)
+                lines = [f"找到 {len(candidates)} 个匹配物品，请回复序号选择："]
+                for i, item in enumerate(candidates[:6], 1):
+                    unit_part = f"{item.count}{item.unit}" if item.count else ""
+                    lines.append(f"{i}. {item.title} — {item.spaceName}/{item.location} ({unit_part})")
+                if operation.consumeAll:
+                    lines.append("回复「全部」将清除所有匹配项")
+                reply_text = "\n".join(lines)
                 return (
                     ChatResult(
                         intent=chat_result.intent,
-                        replyText=f"找到 {len(candidates)} 个候选物品，请选择要操作的那个。",
+                        replyText=reply_text,
                         needsConfirmation=True,
                         pendingId=pending_id,
                         itemSuggestion={
@@ -143,10 +150,17 @@ def execute_chat_operations(chat_result: ChatResult, conn, inventory: list[Item]
             # 单候选也需要确认
             context = {"consumeAll": operation.consumeAll, "patch": operation.patch}
             pending_id = create_pending_consume(conn, candidates, context)
+            item = candidates[0]
+            unit_part = f"{item.count}{item.unit}" if item.count else ""
+            reply_text = (
+                f"找到「{item.title}」— {item.spaceName}/{item.location} "
+                f"({unit_part}，剩余{item.remainingPct}%)，确认要操作吗？\n"
+                f"回复「1」确认，或输入其他内容取消。"
+            )
             return (
                 ChatResult(
                     intent=chat_result.intent,
-                    replyText=f"找到「{candidates[0].title}」，确认要操作吗？",
+                    replyText=reply_text,
                     needsConfirmation=True,
                     pendingId=pending_id,
                     itemSuggestion={

@@ -143,14 +143,22 @@ def consume_node(state: SquirrelGraphState) -> SquirrelGraphState:
         }
 
     if len(candidates) > 1:
+        consume_all = operations[0].consumeAll
+        lines = [f"找到 {len(candidates)} 个匹配物品，请回复序号选择："]
+        for i, item in enumerate(candidates[:6], 1):
+            unit_part = f"{item.count}{item.unit}" if item.count else ""
+            lines.append(f"{i}. {item.title} — {item.spaceName}/{item.location} ({unit_part})")
+        if consume_all:
+            lines.append("回复「全部」将清除所有匹配项")
+        reply_text = "\n".join(lines)
         return {
             "chat_result": ChatResult(
                 intent="consume",
-                replyText=f"找到 {len(candidates)} 个候选物品，请选择要操作的那个。",
+                replyText=reply_text,
                 needsConfirmation=True,
                 itemSuggestion={
                     "matches": [item.model_dump() for item in candidates[:6]],
-                    "consumeAll": operations[0].consumeAll,
+                    "consumeAll": consume_all,
                 },
             )
         }
