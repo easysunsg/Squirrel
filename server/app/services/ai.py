@@ -10,9 +10,19 @@ class AiService:
             return result.get("parsed_items", [])
         return [operation.item for operation in chat_result.operations if operation.type == "add" and operation.item]
 
-    def chat(self, text: str, inventory: list[Item]) -> ChatResult:
-        result = run_squirrel_graph(text, inventory)
-        return result.get("chat_result", ChatResult())
+    def chat(
+        self,
+        text: str,
+        inventory: list[Item],
+        interaction_mode: str = "normal",
+        pending_item_selection: list | None = None,
+    ) -> dict:
+        return run_squirrel_graph(
+            text,
+            inventory,
+            interaction_mode=interaction_mode,
+            pending_item_selection=pending_item_selection,
+        )
 
     def recipe(self, request: RecipeRequest, inventory: list[Item]) -> dict:
         result = run_squirrel_graph("菜谱", request.inventory or inventory)

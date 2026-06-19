@@ -10,6 +10,7 @@ interface ChatProps {
   onClearPreinput: () => void;
   onSaveNewItem: (item: InventoryItem) => Promise<void> | void;
   onSendMessage: (text: string) => Promise<void> | void;
+  onConsumeSelect: (text: string) => Promise<void>;
   onAppendLocalMessage: (message: ChatMessage) => void;
   onClearChatHistory: () => void;
   messages: ChatMessage[];
@@ -30,6 +31,7 @@ export const ChatTab: React.FC<ChatProps> = ({
   onClearPreinput,
   onSaveNewItem,
   onSendMessage,
+  onConsumeSelect,
   onAppendLocalMessage,
   onClearChatHistory,
   messages,
@@ -66,6 +68,8 @@ export const ChatTab: React.FC<ChatProps> = ({
     }
 
     setInputText("");
+    // Always route through normal chat API —
+    // backend handles interaction_mode state via LangGraph
     void onSendMessage(text);
   };
 
@@ -164,7 +168,7 @@ export const ChatTab: React.FC<ChatProps> = ({
               {pendingConsume.candidates.map((candidate, index) => (
                 <button
                   key={candidate.id || index}
-                  onClick={() => void onSendMessage(String(index + 1))}
+                  onClick={() => { setInputText(""); void onSendMessage(String(index + 1)); }}
                   disabled={isSendingMessage}
                   className="px-3 py-1.5 border-2 border-on-background rounded-full bg-[#ffe92e] hover:bg-[#ffd700] active-press-sm text-xs font-display font-bold text-on-background disabled:opacity-50"
                 >
@@ -173,7 +177,7 @@ export const ChatTab: React.FC<ChatProps> = ({
               ))}
               {pendingConsume.consumeAll && (
                 <button
-                  onClick={() => void onSendMessage("全部")}
+                  onClick={() => { setInputText(""); void onSendMessage("全部"); }}
                   disabled={isSendingMessage}
                   className="px-3 py-1.5 border-2 border-on-background rounded-full bg-red-100 hover:bg-red-200 active-press-sm text-xs font-display font-bold text-red-700 disabled:opacity-50"
                 >

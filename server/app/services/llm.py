@@ -95,6 +95,7 @@ class LLMService:
 - update_expiry: 更新保质期（例如：保质期延长、明天过期）
 - expiry_query: 查询临期物品（例如：什么快过期、临期物品）
 - location_query: 查询物品位置（例如：螺蛳粉在哪、放哪了）
+- quantity_query: 查询物品数量（例如：还有几个玉米、还剩多少牛奶）
 - search_query: 搜索物品（例如：还有什么蔬菜、有什么感冒药）
 - idle_query: 查询闲置物品（例如：什么放了很久、长期闲置）
 - recipe: 生成菜谱（例如：吃什么、做什么菜、菜谱建议）

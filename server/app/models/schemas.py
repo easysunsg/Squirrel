@@ -13,6 +13,7 @@ ChatIntent = Literal[
     "update_remaining",
     "expiry_query",
     "location_query",
+    "quantity_query",
     "search_query",
     "idle_query",
     "recipe",
@@ -78,6 +79,10 @@ class ChatResult(BaseModel):
     itemSuggestion: dict[str, Any] | None = None
     needsConfirmation: bool = False
     pendingId: str | None = None
+    # === 物品选择交互状态（跨轮次持久化） ===
+    confirmedItemId: str | None = None  # 用户确认选择的物品 ID
+    confirmedAllItems: bool = False     # 用户选择"全部"
+    confirmedDeductCount: int | None = None  # 用户消耗数量（None=全部消耗）
 
 
 class ConfirmRequest(BaseModel):

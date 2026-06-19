@@ -92,28 +92,38 @@ def test_chat_confirm_empty_items():
 
 
 def test_chat_updates_location():
-    client.post(
+    # 添加并确认胡萝卜
+    r1 = client.post(
         "/api/chat",
         json={
             "messages": [
-                {"id": "msg-user-2", "sender": "user", "text": "买了牛奶，放冰箱下层", "timestamp": "刚刚"}
+                {"id": "msg-user-2", "sender": "user", "text": "买了胡萝卜，放冰箱下层", "timestamp": "刚刚"}
             ]
         },
     )
+    d1 = r1.json()
+    if d1.get("pendingId"):
+        client.post("/api/chat/confirm", json={"pendingId": d1["pendingId"], "items": d1.get("itemSuggestion", {}).get("items", [])})
+
+    # 确认后验证已入库
+    items_before = client.get("/api/items").json()["items"]
+    carrot_before = next((item for item in items_before if item["title"] == "胡萝卜"), None)
+    assert carrot_before is not None, "胡萝卜应已入库"
+    assert carrot_before["location"] == "冰箱下层"
 
     response = client.post(
         "/api/chat",
         json={
             "messages": [
-                {"id": "msg-user-3", "sender": "user", "text": "把牛奶换到冰箱上层", "timestamp": "刚刚"}
+                {"id": "msg-user-3", "sender": "user", "text": "把胡萝卜换到冰箱上层", "timestamp": "刚刚"}
             ]
         },
     )
 
     assert response.status_code == 200
     items = client.get("/api/items").json()["items"]
-    milk = next(item for item in items if item["title"] == "牛奶")
-    assert milk["location"] == "冰箱上层"
+    carrot = next(item for item in items if item["title"] == "胡萝卜")
+    assert carrot["location"] == "冰箱上层"
 
 
 def test_chat_remove_item():
@@ -158,7 +168,8 @@ def test_chat_query_does_not_mutate_inventory():
 
 
 def test_chat_ambiguous_update_returns_suggestion():
-    client.post(
+    # 添加并确认第一个牛奶
+    r1 = client.post(
         "/api/chat",
         json={
             "messages": [
@@ -166,7 +177,12 @@ def test_chat_ambiguous_update_returns_suggestion():
             ]
         },
     )
-    client.post(
+    d1 = r1.json()
+    if d1.get("pendingId"):
+        client.post("/api/chat/confirm", json={"pendingId": d1["pendingId"], "items": d1.get("itemSuggestion", {}).get("items", [])})
+
+    # 添加并确认第二个牛奶（不同位置）
+    r2 = client.post(
         "/api/chat",
         json={
             "messages": [
@@ -174,6 +190,9 @@ def test_chat_ambiguous_update_returns_suggestion():
             ]
         },
     )
+    d2 = r2.json()
+    if d2.get("pendingId"):
+        client.post("/api/chat/confirm", json={"pendingId": d2["pendingId"], "items": d2.get("itemSuggestion", {}).get("items", [])})
 
     response = client.post(
         "/api/chat",

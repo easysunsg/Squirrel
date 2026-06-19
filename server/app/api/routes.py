@@ -10,6 +10,7 @@ from app.db.sqlite import (
     create_pending_consume,
     delete_item,
     delete_pending_confirmation,
+    get_conversation_state,
     get_pending_confirmation,
     get_pending_consume,
     get_state,
@@ -18,6 +19,7 @@ from app.db.sqlite import (
     list_messages,
     replace_messages,
     replace_state,
+    save_conversation_state,
     upsert_item,
 )
 from app.models.schemas import AppState, ChatRequest, ChatResult, ConfirmRequest, ConsumeConfirmRequest, Item, Message, RecipeRequest, TextRequest
@@ -353,11 +355,98 @@ def cli_add(request: TextRequest):
 
 @router.post("/chat")
 def chat(request: ChatRequest):
+    logger.info("Chat requested historyLength=%d", len(request.chatHistory) if request.chatHistory else 0)
     with connect() as conn:
         history = request.chatHistory or list_messages(conn)
         latest = history[-1].text if history else ""
         inventory = list_items(conn)
-        chat_result = ai_service.chat(latest, inventory)
+
+        # === 加载持久化的跨轮次选择状态 ===
+        conv_state = get_conversation_state(conn)
+        interaction_mode = conv_state["interaction_mode"]
+        pending_selection = conv_state["pending_item_selection"]
+
+        # 将选择状态注入 graph
+        graph_result = ai_service.chat(
+            latest,
+            inventory,
+            interaction_mode=interaction_mode,
+            pending_item_selection=pending_selection,
+        )
+        chat_result = graph_result.get("chat_result", ChatResult())
+
+        # === 新增：从 graph 返回的 decision_mode 和 pending_selection 写回 SQLite ===
+        new_mode = graph_result.get("interaction_mode") or "normal"
+        new_selection = graph_result.get("pending_item_selection") or None
+        save_conversation_state(conn, new_mode, new_selection)
+
+        # === 如果 graph 确认了物品选择，直接执行删除/扣减 ===
+        if chat_result.confirmedItemId is not None:
+            item_id = chat_result.confirmedItemId
+            if chat_result.confirmedAllItems:
+                # 删除所有匹配物品
+                deleted_titles: list[str] = []
+                if pending_selection:
+                    for sel in pending_selection:
+                        sel_id = sel.get("id")
+                        if sel_id:
+                            delete_item(conn, sel_id)
+                            deleted_titles.append(sel.get("title", ""))
+                unique_titles = list(dict.fromkeys(deleted_titles))
+                reply_text = f"已清除所有匹配物品：{'、'.join(unique_titles)}。" if unique_titles else "已批量清除。"
+                chat_result.replyText = reply_text
+            else:
+                # 扣减数量逻辑：优先扣减 count，仅当 count ≤ 0 时才删除
+                target_item = next((it for it in inventory if it.id == item_id), None)
+                if not target_item:
+                    current_items = list_items(conn)
+                    target_item = next((it for it in current_items if it.id == item_id), None)
+                if target_item:
+                    deduct_count = chat_result.confirmedDeductCount
+                    if deduct_count is not None and deduct_count > 0:
+                        if deduct_count >= target_item.count:
+                            delete_item(conn, item_id)
+                            reply_text = f"已消耗完「{target_item.title}」（{target_item.count}{target_item.unit}），已从库存移除。"
+                        else:
+                            new_count = target_item.count - deduct_count
+                            new_pct = max(0, round(new_count / max(target_item.count, 1) * 100))
+                            upsert_item(conn, apply_item_patch(target_item, {"count": new_count, "remainingPct": new_pct}))
+                            reply_text = f"已消耗 {deduct_count}{target_item.unit}「{target_item.title}」，剩余 {new_count}{target_item.unit}。"
+                    else:
+                        if target_item.count > 1:
+                            new_count = target_item.count - 1
+                            new_pct = max(0, round(new_count / max(target_item.count, 1) * 100))
+                            upsert_item(conn, apply_item_patch(target_item, {"count": new_count, "remainingPct": new_pct}))
+                            reply_text = f"已消耗 1{target_item.unit}「{target_item.title}」，剩余 {new_count}{target_item.unit}。"
+                        else:
+                            delete_item(conn, item_id)
+                            reply_text = f"已消耗完「{target_item.title}」，已从库存移除。"
+                else:
+                    reply_text = "该物品已不存在，可能已被其他操作处理。"
+                chat_result.replyText = reply_text
+
+            # 构造确认消息
+            from uuid import uuid4
+            confirm_message = Message(
+                id=f"msg-consume-{uuid4().hex[:8]}",
+                sender="assistant",
+                text=reply_text,
+                timestamp="刚刚",
+            )
+            history.append(confirm_message)
+            replace_messages(conn, history)
+            state = get_state(conn)
+
+            sync_inventory_markdown(state)
+            vector_store.upsert_items(state.items)
+
+            return {
+                "reply": reply_text,
+                "messages": history,
+                "items": state.items,
+            }
+
+        # === 剩余逻辑：原有的 execute_chat_operations + 消息存储 ===
         chat_result, updated_items, deleted_ids = execute_chat_operations(chat_result, conn, inventory)
         full_history = history.copy()
         assistant_message = Message(
@@ -371,7 +460,7 @@ def chat(request: ChatRequest):
         replace_messages(conn, full_history)
         state = get_state(conn)
 
-    # === 新增：有 pending 时不执行 sync_outputs ===
+    # === 有 pending 时不执行 sync_outputs ===
     if chat_result.pendingId:
         return {
             "reply": chat_result.replyText,

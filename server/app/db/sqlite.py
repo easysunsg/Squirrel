@@ -168,6 +168,12 @@ def init_db() -> None:
                 items TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS conversation_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                interaction_mode TEXT NOT NULL DEFAULT 'normal',
+                pending_item_selection TEXT
+            );
             """
         )
 
@@ -449,6 +455,29 @@ def get_pending_confirmation(conn: sqlite3.Connection, pending_id: str) -> list[
 def delete_pending_confirmation(conn: sqlite3.Connection, pending_id: str) -> bool:
     cur = conn.execute("DELETE FROM pending_confirmation WHERE id = ?", (pending_id,))
     return cur.rowcount > 0
+
+
+def get_conversation_state(conn: sqlite3.Connection) -> dict:
+    """Load the persistent conversation state (interaction_mode + pending_item_selection)."""
+    row = conn.execute(
+        "SELECT interaction_mode, pending_item_selection FROM conversation_state WHERE id = 1"
+    ).fetchone()
+    return {
+        "interaction_mode": row["interaction_mode"] if row else "normal",
+        "pending_item_selection": json.loads(row["pending_item_selection"]) if row and row["pending_item_selection"] else None,
+    }
+
+
+def save_conversation_state(conn: sqlite3.Connection, interaction_mode: str, pending_item_selection: list | None) -> None:
+    """Save the persistent conversation state."""
+    conn.execute(
+        """INSERT INTO conversation_state(id, interaction_mode, pending_item_selection)
+           VALUES(1, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+               interaction_mode=excluded.interaction_mode,
+               pending_item_selection=excluded.pending_item_selection""",
+        (interaction_mode, json.dumps(pending_item_selection, ensure_ascii=False) if pending_item_selection else None),
+    )
 
 
 def cleanup_expired_pending(conn: sqlite3.Connection, ttl_minutes: int = 30) -> int:

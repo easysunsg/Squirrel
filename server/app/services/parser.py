@@ -277,7 +277,7 @@ def build_chat_result(text: str) -> ChatResult:
             operations=[ChatOperation(type="remove", target=target, removeReason="discarded")],
         )
 
-    if any(word in text for word in ["吃完", "用完", "用了", "喝了一半", "还剩", "一半"]):
+    if any(word in text for word in ["吃完", "用完", "用了", "喝了一半", "一半"]):
         target = extract_target_title(text)
         return ChatResult(
             intent="consume",
@@ -309,6 +309,15 @@ def build_chat_result(text: str) -> ChatResult:
 
     if any(word in text for word in ["在哪", "哪里", "放哪", "位置"]):
         return ChatResult(intent="location_query", replyText="正在查询物品位置。")
+
+    if any(word in text for word in ["还剩", "还有几个", "还有多少", "有多少", "几个", "多少"]):
+        # 数量查询：提取物品名称，按名称精准匹配
+        search_terms = re.sub(r"[我你要看查还有剩几个多少在哪哪里]", "", text).strip()
+        return ChatResult(
+            intent="quantity_query",
+            replyText="正在查询物品数量。",
+            operations=[ChatOperation(type="consume", target=search_terms or text)],
+        )
 
     if any(word in text for word in ["放了很久", "很久没动", "闲置"]):
         return ChatResult(intent="idle_query", replyText="正在查询可能长期闲置的物品。")

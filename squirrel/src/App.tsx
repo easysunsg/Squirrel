@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   Archive,
@@ -227,6 +227,16 @@ export default function App() {
     candidates: ConsumeCandidate[];
     consumeAll: boolean;
   } | null>(null);
+  const pendingConsumeRef = useRef<{
+    pendingId: string;
+    candidates: ConsumeCandidate[];
+    consumeAll: boolean;
+  } | null>(null);
+  const setPendingConsumeSync = (value: typeof pendingConsume) => {
+    pendingConsumeRef.current = value;
+    setPendingConsume(value);
+  };
+  const handleSendChatMessageRef = useRef<(text: string) => Promise<void>>(async () => {});
 
   useEffect(() => {
     const loadInitialState = async () => {
@@ -370,75 +380,15 @@ export default function App() {
   };
 
   const handleSendChatMessage = async (text: string) => {
-    const trimmed = text.trim();
-
-    // === Inline consume confirmation: user replies with a number or "全部"/"确认" ===
-    if (pendingConsume) {
-      let selectedIndex: number | null = null;
-      let consumeAll = false;
-
-      if (/^\d+$/.test(trimmed)) {
-        const idx = parseInt(trimmed, 10) - 1;
-        if (idx >= 0 && idx < pendingConsume.candidates.length) {
-          selectedIndex = idx;
-        }
-      } else if (trimmed === "全部" && pendingConsume.consumeAll) {
-        selectedIndex = 0;
-        consumeAll = true;
-      } else if (trimmed === "确认" && pendingConsume.candidates.length === 1) {
-        selectedIndex = 0;
-      }
-
-      if (selectedIndex !== null) {
-        // User provided a valid selection — send to consume-confirm endpoint
-        const userMessage = createChatMessage("user", text);
-        setMessages((prev) => [...prev, userMessage]);
-        setChatError(null);
-        setIsSendingMessage(true);
-        try {
-          const response = await fetch("/api/chat/consume-confirm", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              pendingId: pendingConsume.pendingId,
-              selectedIndex,
-              consumeAll,
-            }),
-          });
-
-          if (!response.ok) {
-            const errorBody = await response.json().catch(() => null);
-            throw new Error(errorBody?.detail || `Consume confirm failed: ${response.status}`);
-          }
-
-          const data = await response.json();
-          if (Array.isArray(data.items)) {
-            saveItemsToStorage(normalizeServerItems(data.items));
-          }
-          if (Array.isArray(data.messages)) {
-            setMessages(normalizeMessageList(data.messages));
-          }
-        } catch (error) {
-          console.error("Failed to confirm consume", error);
-          setChatError("确认消耗失败，请重试。");
-        } finally {
-          setPendingConsume(null);
-          setIsSendingMessage(false);
-        }
-        return;
-      }
-
-      // Invalid input — clear pending and fall through to normal chat
-      setPendingConsume(null);
-    }
-
-    // === Normal chat flow ===
     const userMessage = createChatMessage("user", text);
     const nextMessages = [...messages, userMessage];
 
     setMessages(nextMessages);
     setChatError(null);
     setIsSendingMessage(true);
+    // Clear any stale pending state — backend is now the single source of truth
+    setPendingConsumeSync(null);
+    setPendingConfirm(null);
 
     try {
       const response = await fetch("/api/chat", {
@@ -479,10 +429,10 @@ export default function App() {
       }
 
       // Handle consume confirmation — inline in chat (no modal)
-      if (data.needsConfirmation && data.pendingId && Array.isArray(data.itemSuggestion?.matches)) {
-        const candidates = data.itemSuggestion.matches as ConsumeCandidate[];
-        setPendingConsume({
-          pendingId: data.pendingId,
+      if (data.needsConfirmation && Array.isArray(data.itemSuggestion?.matches)) {
+        const candidates = data.itemSuggestion.matches as unknown as ConsumeCandidate[];
+        setPendingConsumeSync({
+          pendingId: data.pendingId || '',
           candidates,
           consumeAll: data.itemSuggestion.consumeAll ?? false,
         });
@@ -513,6 +463,43 @@ export default function App() {
       setIsSendingMessage(false);
     }
   };
+  // Keep ref pointing to latest handler so ChatTab always calls the newest closure
+  handleSendChatMessageRef.current = handleSendChatMessage;
+
+  // Separate handler for inline consume confirmation — now routes through normal chat API
+  const handleConsumeSelection = async (text: string) => {
+    const currentPending = pendingConsumeRef.current;
+    if (!currentPending) return;
+
+    const trimmed = text.trim();
+
+    // Validate the input is a valid selection
+    let isValidSelection = false;
+    if (/^\d+$/.test(trimmed)) {
+      const idx = parseInt(trimmed, 10) - 1;
+      if (idx >= 0 && idx < currentPending.candidates.length) {
+        isValidSelection = true;
+      }
+    } else if (trimmed === "全部" && currentPending.consumeAll) {
+      isValidSelection = true;
+    } else if (trimmed === "取消" || trimmed === "退出") {
+      isValidSelection = true;
+    }
+
+    if (!isValidSelection) {
+      // For invalid input, just forward the text as a normal message
+      // The backend will handle it and return an error prompt
+      setPendingConsumeSync(null);
+      return false;
+    }
+
+    // Route through normal chat API — backend handles the interaction_mode state
+    setPendingConsumeSync(null);
+    await handleSendChatMessageRef.current(trimmed);
+    return true;
+  };
+  const handleConsumeSelectionRef = useRef<(text: string) => Promise<boolean>>(async () => false);
+  handleConsumeSelectionRef.current = handleConsumeSelection;
 
   const handleConfirmItems = async (pendingId: string, confirmedItems: PendingItem[]) => {
     setChatError(null);
@@ -734,7 +721,8 @@ export default function App() {
                   preinput={chatPreinput}
                   onClearPreinput={() => setChatPreinput("")}
                   onSaveNewItem={handleSaveItem}
-                  onSendMessage={handleSendChatMessage}
+                  onSendMessage={(text: string) => handleSendChatMessageRef.current(text)}
+                  onConsumeSelect={(text: string) => handleConsumeSelectionRef.current(text)}
                   onAppendLocalMessage={appendChatMessage}
                   onClearChatHistory={() => {
                     void handleClearChatHistory();
@@ -743,7 +731,7 @@ export default function App() {
                   isSendingMessage={isSendingMessage}
                   chatError={chatError}
                   pendingConsume={pendingConsume}
-                  onCancelPendingConsume={() => setPendingConsume(null)}
+                  onCancelPendingConsume={() => setPendingConsumeSync(null)}
                 />
                 {pendingConfirm && (
                   <ConfirmModal
