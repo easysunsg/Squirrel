@@ -16,12 +16,18 @@ class AiService:
         inventory: list[Item],
         interaction_mode: str = "normal",
         pending_item_selection: list | None = None,
+        pending_operation: dict | None = None,
+        last_added_item: dict | None = None,
+        current_context_item: dict | None = None,
     ) -> dict:
         return run_squirrel_graph(
             text,
             inventory,
             interaction_mode=interaction_mode,
             pending_item_selection=pending_item_selection,
+            pending_operation=pending_operation,
+            last_added_item=last_added_item,
+            current_context_item=current_context_item,
         )
 
     def recipe(self, request: RecipeRequest, inventory: list[Item]) -> dict:

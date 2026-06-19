@@ -83,6 +83,7 @@ class ChatResult(BaseModel):
     confirmedItemId: str | None = None  # 用户确认选择的物品 ID
     confirmedAllItems: bool = False     # 用户选择"全部"
     confirmedDeductCount: int | None = None  # 用户消耗数量（None=全部消耗）
+    confirmedPatch: dict[str, Any] | None = None  # 确认后要执行的属性修改（如 {"location": "冰箱上层"}）
 
 
 class ConfirmRequest(BaseModel):

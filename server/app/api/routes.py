@@ -361,30 +361,53 @@ def chat(request: ChatRequest):
         latest = history[-1].text if history else ""
         inventory = list_items(conn)
 
-        # === 加载持久化的跨轮次选择状态 ===
+        # === 加载持久化的跨轮次状态 ===
         conv_state = get_conversation_state(conn)
         interaction_mode = conv_state["interaction_mode"]
         pending_selection = conv_state["pending_item_selection"]
+        pending_operation = conv_state.get("pending_operation")
+        last_added_item = conv_state.get("last_added_item")
+        current_context_item = conv_state.get("current_context_item")
 
-        # 将选择状态注入 graph
+        # 将完整状态注入 graph
         graph_result = ai_service.chat(
             latest,
             inventory,
             interaction_mode=interaction_mode,
             pending_item_selection=pending_selection,
+            pending_operation=pending_operation,
+            last_added_item=last_added_item,
+            current_context_item=current_context_item,
         )
         chat_result = graph_result.get("chat_result", ChatResult())
 
-        # === 新增：从 graph 返回的 decision_mode 和 pending_selection 写回 SQLite ===
+        # === 从 graph 返回的交互状态写回 SQLite ===
         new_mode = graph_result.get("interaction_mode") or "normal"
         new_selection = graph_result.get("pending_item_selection") or None
-        save_conversation_state(conn, new_mode, new_selection)
+        new_operation = graph_result.get("pending_operation") or None
+        new_last_added = graph_result.get("last_added_item") if "last_added_item" in graph_result else last_added_item
+        new_context_item = graph_result.get("current_context_item") if "current_context_item" in graph_result else current_context_item
+        save_conversation_state(conn, new_mode, new_selection, new_operation, new_last_added, new_context_item)
 
-        # === 如果 graph 确认了物品选择，直接执行删除/扣减 ===
+        # === 如果 graph 确认了物品选择，直接执行操作 ===
         if chat_result.confirmedItemId is not None:
             item_id = chat_result.confirmedItemId
-            if chat_result.confirmedAllItems:
-                # 删除所有匹配物品
+
+            # 情况 1：属性修改（confirmedPatch）
+            if chat_result.confirmedPatch:
+                target_item = next((it for it in inventory if it.id == item_id), None)
+                if not target_item:
+                    current_items = list_items(conn)
+                    target_item = next((it for it in current_items if it.id == item_id), None)
+                if target_item:
+                    upsert_item(conn, apply_item_patch(target_item, chat_result.confirmedPatch))
+                    reply_text = chat_result.replyText or f"已更新「{target_item.title}」。"
+                else:
+                    reply_text = "该物品已不存在，可能已被其他操作处理。"
+                chat_result.replyText = reply_text
+
+            # 情况 2：全部清除
+            elif chat_result.confirmedAllItems:
                 deleted_titles: list[str] = []
                 if pending_selection:
                     for sel in pending_selection:
@@ -395,8 +418,9 @@ def chat(request: ChatRequest):
                 unique_titles = list(dict.fromkeys(deleted_titles))
                 reply_text = f"已清除所有匹配物品：{'、'.join(unique_titles)}。" if unique_titles else "已批量清除。"
                 chat_result.replyText = reply_text
+
+            # 情况 3：消耗/删除单个物品
             else:
-                # 扣减数量逻辑：优先扣减 count，仅当 count ≤ 0 时才删除
                 target_item = next((it for it in inventory if it.id == item_id), None)
                 if not target_item:
                     current_items = list_items(conn)
@@ -498,6 +522,18 @@ def confirm_items(request: ConfirmRequest):
 
         created = [upsert_item(conn, item) for item in request.items]
         delete_pending_confirmation(conn, request.pendingId)
+
+        # 保存最近新增物品（支持近指代查询）
+        if created:
+            conv_state = get_conversation_state(conn)
+            save_conversation_state(
+                conn,
+                interaction_mode=conv_state.get("interaction_mode", "normal"),
+                pending_item_selection=conv_state.get("pending_item_selection"),
+                pending_operation=conv_state.get("pending_operation"),
+                last_added_item=created[-1].model_dump(),
+            )
+
         state = get_state(conn)
 
     sync_inventory_markdown(state)

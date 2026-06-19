@@ -277,7 +277,7 @@ def build_chat_result(text: str) -> ChatResult:
             operations=[ChatOperation(type="remove", target=target, removeReason="discarded")],
         )
 
-    if any(word in text for word in ["吃完", "用完", "用了", "喝了一半", "一半"]):
+    if any(word in text for word in ["吃完", "用完", "用了", "吃了", "吃掉", "喝了一半", "一半"]):
         target = extract_target_title(text)
         return ChatResult(
             intent="consume",

@@ -172,7 +172,10 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS conversation_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 interaction_mode TEXT NOT NULL DEFAULT 'normal',
-                pending_item_selection TEXT
+                pending_item_selection TEXT,
+                pending_operation TEXT,
+                last_added_item TEXT,
+                current_context_item TEXT
             );
             """
         )
@@ -194,6 +197,13 @@ def init_db() -> None:
             conn.execute("ALTER TABLE pending_confirmation ADD COLUMN type TEXT NOT NULL DEFAULT 'add'")
         if "context" not in pending_columns:
             conn.execute("ALTER TABLE pending_confirmation ADD COLUMN context TEXT")
+
+        # conversation_state table — add columns for pending_operation and last_added_item
+        cs_columns = {row["name"] for row in conn.execute("PRAGMA table_info(conversation_state)").fetchall()}
+        if "pending_operation" not in cs_columns:
+            conn.execute("ALTER TABLE conversation_state ADD COLUMN pending_operation TEXT")
+        if "last_added_item" not in cs_columns:
+            conn.execute("ALTER TABLE conversation_state ADD COLUMN last_added_item TEXT")
 
         if conn.execute("SELECT COUNT(*) FROM spaces").fetchone()[0] == 0:
             replace_spaces(conn, DEFAULT_SPACES)
@@ -458,25 +468,44 @@ def delete_pending_confirmation(conn: sqlite3.Connection, pending_id: str) -> bo
 
 
 def get_conversation_state(conn: sqlite3.Connection) -> dict:
-    """Load the persistent conversation state (interaction_mode + pending_item_selection)."""
+    """Load the persistent conversation state."""
     row = conn.execute(
-        "SELECT interaction_mode, pending_item_selection FROM conversation_state WHERE id = 1"
+        "SELECT interaction_mode, pending_item_selection, pending_operation, last_added_item, current_context_item FROM conversation_state WHERE id = 1"
     ).fetchone()
     return {
         "interaction_mode": row["interaction_mode"] if row else "normal",
         "pending_item_selection": json.loads(row["pending_item_selection"]) if row and row["pending_item_selection"] else None,
+        "pending_operation": json.loads(row["pending_operation"]) if row and row["pending_operation"] else None,
+        "last_added_item": json.loads(row["last_added_item"]) if row and row["last_added_item"] else None,
+        "current_context_item": json.loads(row["current_context_item"]) if row and row["current_context_item"] else None,
     }
 
 
-def save_conversation_state(conn: sqlite3.Connection, interaction_mode: str, pending_item_selection: list | None) -> None:
+def save_conversation_state(
+    conn: sqlite3.Connection,
+    interaction_mode: str = "normal",
+    pending_item_selection: list | None = None,
+    pending_operation: dict | None = None,
+    last_added_item: dict | None = None,
+    current_context_item: dict | None = None,
+) -> None:
     """Save the persistent conversation state."""
     conn.execute(
-        """INSERT INTO conversation_state(id, interaction_mode, pending_item_selection)
-           VALUES(1, ?, ?)
+        """INSERT INTO conversation_state(id, interaction_mode, pending_item_selection, pending_operation, last_added_item, current_context_item)
+           VALUES(1, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
                interaction_mode=excluded.interaction_mode,
-               pending_item_selection=excluded.pending_item_selection""",
-        (interaction_mode, json.dumps(pending_item_selection, ensure_ascii=False) if pending_item_selection else None),
+               pending_item_selection=excluded.pending_item_selection,
+               pending_operation=excluded.pending_operation,
+               last_added_item=excluded.last_added_item,
+               current_context_item=excluded.current_context_item""",
+        (
+            interaction_mode,
+            json.dumps(pending_item_selection, ensure_ascii=False) if pending_item_selection else None,
+            json.dumps(pending_operation, ensure_ascii=False) if pending_operation else None,
+            json.dumps(last_added_item, ensure_ascii=False) if last_added_item else None,
+            json.dumps(current_context_item, ensure_ascii=False) if current_context_item else None,
+        ),
     )
 
 
