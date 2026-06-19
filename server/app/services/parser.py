@@ -1,7 +1,14 @@
+import json
+import logging
 import re
 from datetime import date, timedelta
+from typing import Optional
+
+from pydantic import BaseModel, Field
 
 from app.models.schemas import ChatOperation, ChatResult, InventoryCategory, Item
+
+logger = logging.getLogger(__name__)
 
 
 SPACE_KEYWORDS = {
@@ -258,7 +265,150 @@ def parse_lightning_text(text: str) -> list[Item]:
     return items
 
 
-def build_chat_result(text: str) -> ChatResult:
+# ---------------------------------------------------------------------------
+# LLM-based intent extraction
+# ---------------------------------------------------------------------------
+
+
+class IntentExtractionResult(BaseModel):
+    """Structured output schema for LLM intent extraction."""
+
+    intent: str = Field(
+        description="用户意图，只能取以下枚举值：add, consume, remove, update_location, "
+        "update_expiry, quantity_query, location_query, expiry_query, "
+        "idle_query, recipe, search_query, chat"
+    )
+    item_name: str = Field(default="", description="物品名称，提取不到则为空字符串")
+    quantity: Optional[int] = Field(default=None, description="物品数量，提取不到则为null")
+    location: str = Field(default="", description="存放位置，提取不到则为空字符串")
+    expire_date: str = Field(
+        default="",
+        description="保质期/过期时间，格式为YYYY-MM-DD绝对日期或+Nd相对天数（如+7d表示7天后）；提取不到则为空字符串"
+    )
+    remaining_pct: Optional[int] = Field(
+        default=None,
+        description="消耗后的剩余百分比（0-100），如'吃完'→0，'用了一半'→50；提取不到则为null"
+    )
+    confidence: float = Field(description="识别置信度，0-1之间，低于0.6则视为无法识别")
+
+
+INTENT_EXTRACT_PROMPT = """## 角色定位
+你是家庭物品管理系统的专属意图识别与实体提取助手。你的唯一任务是从用户输入中精准识别用户意图、提取结构化实体参数，严格按照指定JSON格式输出结果，禁止输出任何解释、说明、markdown格式、代码块等额外内容，只输出纯JSON。
+
+## 输出Schema（必须严格遵守，字段不可新增、不可删减、不可修改枚举值）
+```json
+{{
+    "intent": "字符串，必填，只能从【意图枚举列表】中选择，不可自创",
+    "item_name": "字符串，必填，提取到的物品核心名称，提取不到则为空字符串",
+    "quantity": "整数/Null，必填，提取到的物品数量，纯数字；提取不到、数量模糊（如"一些""少许"）则为null",
+    "location": "字符串，必填，提取到的存放位置，包含层级描述；提取不到则为空字符串",
+    "expire_date": "字符串，必填，保质期/过期时间；绝对日期用YYYY-MM-DD格式（如2025-12-31）；相对天数用+Nd格式（如+7d表示7天后、+30d表示30天后）；提取不到则为空字符串",
+    "remaining_pct": "整数/Null，必填，消耗后剩余百分比（0-100）；'吃完/用完'→0，'用了一半/吃了一半'→50，'还剩30%'→30；与消耗无关或提取不到则为null",
+    "confidence": "浮点数，必填，0-1之间的识别置信度，保留2位小数"
+}}
+```
+
+## 意图枚举列表（必须严格从以下列表选择，按优先级判定）
+| 意图枚举值 | 意图定义 | 核心语义特征 |
+|---|---|---|
+| add | 新增/购买/录入物品到库存 | 包含购买、购入、新增、存入、录入、添加、囤货、采购、买回来等新增库存的语义 |
+| consume | 消耗/使用/吃掉/喝掉物品，扣减库存数量 | 包含吃完、用完、用了、吃了、吃掉、喝了、消耗、用掉等使用消耗的语义，仅扣减数量，不删除整条记录 |
+| remove | 丢弃/清除/扔掉物品，删除整条库存记录 | 包含扔掉、扔了、丢弃、丢掉、清掉、删除、坏了扔掉、过期扔掉等移除整条记录的语义 |
+| update_location | 修改/移动物品的存放位置 | 包含换到、移到、挪到、放到、放进、放在、挪去、移去、转移到等修改位置的语义，无新增/购买语义 |
+| update_expiry | 修改物品的保质期/过期时间 | 包含修改保质期、更新过期时间、设置有效期等语义 |
+| quantity_query | 查询物品的剩余数量/库存 | 包含还剩、还有几个、还有多少、有多少、几个、多少、库存多少等查询数量的语义 |
+| location_query | 查询物品的存放位置 | 包含在哪、哪里、放哪、位置、放在哪、放在哪里等查询位置的语义 |
+| expiry_query | 查询临期/即将过期/已过期的物品 | 包含过期、快坏、临期、告急、快过期、要过期了等查询临期物品的语义 |
+| idle_query | 查询长期闲置/放了很久的物品 | 包含放了很久、很久没动、闲置、很久没用等查询闲置物品的语义 |
+| recipe | 查询菜谱/做饭建议/食材搭配 | 包含吃什么、做什么、菜谱、做饭、能做什么菜等语义 |
+| search_query | 模糊搜索某类/某个物品是否存在 | 包含还有什么、什么菜、有什么、有没有XX等泛化搜索的语义 |
+| chat | 无关闲聊/无法识别的无效请求 | 与家庭物品管理完全无关的内容，或语义极度模糊无法识别 |
+
+## 实体提取详细规则
+1. item_name（物品名称）：提取核心物品名称，可保留必要的属性修饰词（如"常温牛奶""脱脂牛奶"视为不同物品）；用户使用代词（它、这个、那个）时留空；提取不到时留空字符串
+2. quantity（数量）：只提取纯数字整数，自动转换口语化：俩=2、仨=3、一打=12、半打=6；模糊数量（一些、少许、很多）为null；未提及也为null
+3. location（位置）：提取完整位置层级描述（如"冰箱中层""车库A4搁板"）；只提取目标位置，不提取来源位置；提取不到时留空
+4. expire_date（保质期）：仅在update_expiry意图中提取；用户说"延长N天"→+Nd格式；用户说具体日期→YYYY-MM-DD；"明天过期"→+1d；"下周过期"→+7d；提取不到时留空字符串
+5. remaining_pct（剩余百分比）：仅在consume意图中提取；"吃完/用完/吃掉了"→0；"一半/半"→50；"还剩30%"→30；与消耗无关时为null
+
+## 置信度评分标准
+- 0.90~1.00：意图100%明确，物品名称、关键参数清晰无歧义
+- 0.70~0.89：意图基本明确，核心物品名称清晰，少量参数模糊
+- 0.50~0.69：意图有歧义，或关键实体缺失
+- 0.00~0.49：完全无法识别意图，或与物品管理场景完全无关
+
+## 歧义场景优先级判定
+- 新增vs修改位置：同时出现"购买"和"位置"语义，优先判定为add，位置填入location字段
+- 消耗vs删除："扔掉、丢弃"判定为remove；"吃了、用了"判定为consume
+- 数量查询vs通用搜索：明确出现"多少、几个"判定为quantity_query；泛泛问"有什么"判定为search_query
+
+## 参考示例
+输入：买了两个玉米放厨房
+输出：{{"intent":"add","item_name":"玉米","quantity":2,"location":"厨房","expire_date":"","remaining_pct":null,"confidence":0.95}}
+
+输入：把牛奶换到冰箱中层
+输出：{{"intent":"update_location","item_name":"牛奶","quantity":null,"location":"冰箱中层","expire_date":"","remaining_pct":null,"confidence":0.92}}
+
+输入：我还有几个鸡蛋
+输出：{{"intent":"quantity_query","item_name":"鸡蛋","quantity":null,"location":"","expire_date":"","remaining_pct":null,"confidence":0.90}}
+
+输入：刚刚吃掉了两个
+输出：{{"intent":"consume","item_name":"","quantity":2,"location":"","expire_date":"","remaining_pct":null,"confidence":0.60}}
+
+输入：把面包吃完了
+输出：{{"intent":"consume","item_name":"面包","quantity":null,"location":"","expire_date":"","remaining_pct":0,"confidence":0.92}}
+
+输入：牛奶用了一半
+输出：{{"intent":"consume","item_name":"牛奶","quantity":null,"location":"","expire_date":"","remaining_pct":50,"confidence":0.88}}
+
+输入：土豆保质期再延7天
+输出：{{"intent":"update_expiry","item_name":"土豆","quantity":null,"location":"","expire_date":"+7d","remaining_pct":null,"confidence":0.93}}
+
+输入：鸡蛋明天过期
+输出：{{"intent":"update_expiry","item_name":"鸡蛋","quantity":null,"location":"","expire_date":"+1d","remaining_pct":null,"confidence":0.85}}
+
+输入：今天天气真好
+输出：{{"intent":"chat","item_name":"","quantity":null,"location":"","expire_date":"","remaining_pct":null,"confidence":0.20}}
+
+## 最终禁令
+绝对禁止输出JSON以外的任何内容
+绝对禁止自创枚举列表以外的意图值
+绝对禁止编造物品名称、数量、位置，提取不到就留空/null
+绝对禁止修改输出Schema的字段名、字段类型
+
+现在处理用户输入：{user_text}"""
+
+
+def extract_intent_with_llm(text: str) -> IntentExtractionResult | None:
+    """Call LLM to extract intent and entities. Returns None on any failure."""
+    try:
+        from app.services.llm import llm_service
+
+        if not llm_service.enabled:
+            return None
+
+        prompt = INTENT_EXTRACT_PROMPT.format(user_text=text)
+        messages = [{"role": "user", "content": prompt}]
+
+        response_text = llm_service._call_openai_compatible(
+            messages,
+            response_format={"type": "json_object"},
+        )
+
+        result_json = json.loads(response_text)
+        return IntentExtractionResult(**result_json)
+    except Exception:
+        logger.warning("LLM intent extraction failed, will fall back to rules", exc_info=True)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Rule-based fallback (original logic)
+# ---------------------------------------------------------------------------
+
+
+def build_chat_result_by_rules(text: str) -> ChatResult:
+    """Rule-based intent matching — the original deterministic fallback."""
     if any(word in text for word in ["买了", "购入", "新增", "存入", "录入", "添加"]):
         parsed = parse_lightning_text(text)
         if not parsed:
@@ -329,3 +479,180 @@ def build_chat_result(text: str) -> ChatResult:
         return ChatResult(intent="search_query", replyText="正在帮你搜索相关库存。")
 
     return ChatResult(intent="chat", replyText="我查到当前库存了，你可以让我录入、查位置、列临期或更新物品。")
+
+
+# ---------------------------------------------------------------------------
+# Main entry: LLM-first with rule-based fallback
+# ---------------------------------------------------------------------------
+
+_INTENT_REPLY_MAP: dict[str, str] = {
+    "add": "已识别出物品，准备入库。",
+    "consume": "我会尝试更新该物品的消耗情况。",
+    "remove": "我会尝试将对应物品移出库存。",
+    "update_location": "我会尝试更新该物品的位置。",
+    "update_expiry": "我会尝试更新该物品的保质期。",
+    "quantity_query": "正在查询物品数量。",
+    "location_query": "正在查询物品位置。",
+    "expiry_query": "正在查询临期物品。",
+    "idle_query": "正在查询可能长期闲置的物品。",
+    "recipe": "正在整理可用食材并生成建议。",
+    "search_query": "正在帮你搜索相关库存。",
+    "chat": "我查到当前库存了，你可以让我录入、查位置、列临期或更新物品。",
+}
+
+
+def _build_operations_from_llm(result: IntentExtractionResult, text: str) -> list[ChatOperation]:
+    """Build ChatOperation list from LLM extraction result.
+
+    LLM-extracted entities are used as the primary source.
+    Regex-based helpers are only used as a last resort when the LLM didn't extract the entity.
+    """
+    intent = result.intent
+    item_name = result.item_name
+    quantity = result.quantity
+    location = result.location
+    expire_date = result.expire_date
+    remaining_pct = result.remaining_pct
+
+    if intent == "add":
+        # For add, use the full parser to get complete Item objects (handles batch "鸡蛋、香蕉、猪肉")
+        parsed = parse_lightning_text(text)
+        if parsed:
+            return [ChatOperation(type="add", item=item) for item in parsed]
+        # Fallback: build a minimal item from LLM-extracted entities
+        if item_name:
+            item = Item(
+                title=item_name,
+                count=quantity or 1,
+                location=location or "默认层架",
+            )
+            return [ChatOperation(type="add", item=item)]
+        return []
+
+    if intent == "consume":
+        # LLM entity first, regex fallback last
+        target = item_name or extract_target_title(text) or None
+        patch = None
+        if remaining_pct is not None or quantity is not None:
+            patch = {}
+            if remaining_pct is not None:
+                patch["remainingPct"] = remaining_pct
+            if quantity is not None:
+                patch["deductCount"] = quantity
+        return [ChatOperation(type="consume", target=target or text, patch=patch)]
+
+    if intent == "remove":
+        target = item_name or extract_target_title(text) or None
+        return [ChatOperation(type="remove", target=target, removeReason="discarded")]
+
+    if intent == "update_location":
+        target = item_name or extract_target_title(text) or None
+        # LLM entity first, regex fallback last
+        loc = location or extract_location_update(text) or None
+        if target and loc:
+            return [ChatOperation(type="update", target=target, patch={"location": loc})]
+        # Target known but location missing → return target for follow-up question
+        if target:
+            return [ChatOperation(type="update", target=target)]
+
+    if intent == "update_expiry":
+        target = item_name or extract_target_title(text) or None
+        patch = _build_expire_patch(expire_date, text)
+        if target and patch:
+            return [ChatOperation(type="update", target=target, patch=patch)]
+        # Target known but expire info missing → return target for follow-up
+        if target:
+            return [ChatOperation(type="update", target=target)]
+
+    if intent == "quantity_query":
+        # LLM entity first, regex cleanup last
+        search_terms = item_name or re.sub(r"[我你要看查还有剩几个多少在哪哪里]", "", text).strip()
+        return [ChatOperation(type="consume", target=search_terms or text)]
+
+    # expiry_query, location_query, idle_query, recipe, search_query, chat → no operations
+    return []
+
+
+def _build_expire_patch(expire_date: str, text: str) -> dict[str, str] | None:
+    """Build expireDate patch from LLM-extracted expire_date or regex fallback.
+
+    Supports:
+    - Relative: "+7d" → 7 days from now
+    - Absolute: "2025-12-31" → use directly
+    - Regex fallback for legacy patterns like "保质期再延N天", "明天过期"
+    """
+    if expire_date:
+        if expire_date.startswith("+") and expire_date.endswith("d"):
+            try:
+                days = int(expire_date[1:-1])
+                return {"expireDate": days_from_now(days)}
+            except ValueError:
+                pass
+        elif re.match(r"\d{4}-\d{2}-\d{2}", expire_date):
+            return {"expireDate": expire_date}
+
+    # Regex fallback for patterns the LLM might not have structured
+    return extract_expire_patch(text)
+
+
+def build_chat_result(text: str) -> ChatResult:
+    """Build ChatResult using LLM intent extraction with rule-based fallback.
+
+    Flow:
+    1. Call LLM to extract intent + entities.
+    2. If LLM succeeds with confidence >= 0.6, build result from LLM output.
+    3. If confidence is between 0.5-0.6, could prompt for confirmation (future).
+    4. If LLM fails or confidence < 0.5, fall back to rule-based matching.
+    """
+    # Step 1: Try LLM extraction
+    llm_result = extract_intent_with_llm(text)
+
+    # Step 2: High confidence → use LLM result directly
+    if llm_result and llm_result.confidence >= 0.6:
+        intent = llm_result.intent
+        reply_text = _INTENT_REPLY_MAP.get(intent, "操作已接收")
+        operations = _build_operations_from_llm(llm_result, text)
+
+        # For add intent, override reply with actual parsed count
+        if intent == "add" and operations:
+            reply_text = f"已识别出 {len(operations)} 件物品，准备入库。"
+        elif intent == "add" and not operations:
+            reply_text = "我没有识别出明确物品，可以换一种说法再试一次。"
+
+        logger.info(
+            "LLM intent extraction succeeded: intent=%s confidence=%.2f item=%r",
+            intent,
+            llm_result.confidence,
+            llm_result.item_name,
+        )
+        return ChatResult(
+            intent=intent,
+            replyText=reply_text,
+            operations=operations,
+        )
+
+    # Step 3: Medium confidence (0.5-0.6) — still use LLM but log a warning
+    if llm_result and 0.5 <= llm_result.confidence < 0.6:
+        intent = llm_result.intent
+        reply_text = _INTENT_REPLY_MAP.get(intent, "操作已接收")
+        operations = _build_operations_from_llm(llm_result, text)
+
+        if intent == "add" and operations:
+            reply_text = f"已识别出 {len(operations)} 件物品，准备入库。"
+        elif intent == "add" and not operations:
+            reply_text = "我没有识别出明确物品，可以换一种说法再试一次。"
+
+        logger.info(
+            "LLM intent extraction with medium confidence: intent=%s confidence=%.2f",
+            intent,
+            llm_result.confidence,
+        )
+        return ChatResult(
+            intent=intent,
+            replyText=reply_text,
+            operations=operations,
+        )
+
+    # Step 4: Low confidence or LLM failure → fall back to rules
+    logger.info("Falling back to rule-based intent matching for text=%r", text)
+    return build_chat_result_by_rules(text)
