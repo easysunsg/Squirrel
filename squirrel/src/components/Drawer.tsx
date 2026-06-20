@@ -139,8 +139,6 @@ export const Drawer: React.FC<DrawerProps> = ({
     }
   };
 
-  const isView = action === "view";
-
   return (
     <AnimatePresence>
       {isOpen && (
@@ -168,7 +166,7 @@ export const Drawer: React.FC<DrawerProps> = ({
                 <SquirrelLogo size={28} />
                 <div>
                   <h3 className="font-display font-bold text-on-background text-[17px]">
-                    {action === "create" ? "新增小窝库存" : isView ? "看一眼松枝藏品" : "改写藏品档案"}
+                    {action === "create" ? "新增小窝库存" : "藏品档案"}
                   </h3>
                   <p className="text-[11px] text-outline font-sans">
                     {action === "create" ? "松鼠已准备好挖树洞屯粮啦" : `档案编码: ${item?.id || "N/A"}`}
@@ -183,7 +181,7 @@ export const Drawer: React.FC<DrawerProps> = ({
               </button>
             </div>
 
-            {/* Scrollable form */}
+            {/* Scrollable form — all fields are editable in detail view */}
             <div className="flex-1 overflow-y-auto p-5 space-y-5 bg-paper scrollbar-hide">
               {/* Name */}
               <div className="space-y-1.5">
@@ -191,10 +189,9 @@ export const Drawer: React.FC<DrawerProps> = ({
                 <input
                   type="text"
                   placeholder="如：松子罐、布洛芬、数据线"
-                  disabled={isView}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full p-2.5 border-2 border-on-background rounded-xl bg-white text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-75 disabled:bg-surface-container"
+                  className="w-full p-2.5 border-2 border-on-background rounded-xl bg-white text-sm focus:outline-none focus:ring-1 focus:ring-primary"
                 />
               </div>
 
@@ -203,10 +200,9 @@ export const Drawer: React.FC<DrawerProps> = ({
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-on-background block">归口分类</label>
                   <select
-                    disabled={isView}
                     value={category}
                     onChange={(e) => setCategory(e.target.value as InventoryCategory)}
-                    className="w-full p-2.5 border-2 border-on-background rounded-xl bg-white text-sm focus:outline-none focus:ring-1 focus:ring-primary relative z-10 cursor-pointer disabled:cursor-not-allowed disabled:opacity-75 disabled:bg-surface-container"
+                    className="w-full p-2.5 border-2 border-on-background rounded-xl bg-white text-sm focus:outline-none focus:ring-1 focus:ring-primary relative z-10 cursor-pointer"
                   >
                     {Object.entries(CATEGORY_MAP).map(([key, meta]) => (
                       <option key={key} value={key}>
@@ -219,10 +215,9 @@ export const Drawer: React.FC<DrawerProps> = ({
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-on-background block">储藏树桠角落</label>
                   <select
-                    disabled={isView}
                     value={location}
                     onChange={(e) => setLocation(e.target.value)}
-                    className="w-full p-2.5 border-2 border-on-background rounded-xl bg-white text-sm focus:outline-none focus:ring-1 focus:ring-primary relative z-10 cursor-pointer disabled:cursor-not-allowed disabled:opacity-75 disabled:bg-surface-container"
+                    className="w-full p-2.5 border-2 border-on-background rounded-xl bg-white text-sm focus:outline-none focus:ring-1 focus:ring-primary relative z-10 cursor-pointer"
                   >
                     {defaultLocations.map((loc) => (
                       <option key={loc} value={loc}>
@@ -240,7 +235,7 @@ export const Drawer: React.FC<DrawerProps> = ({
                   <div className="flex items-center border-2 border-on-background rounded-xl bg-white overflow-hidden">
                     <button
                       type="button"
-                      disabled={isView || quantity <= 1}
+                      disabled={quantity <= 1}
                       onClick={() => setQuantity(Math.max(1, quantity - 1))}
                       className="px-3 py-1 bg-surface-container border-r-2 border-on-background font-bold text-on-background disabled:opacity-50 cursor-pointer text-sm"
                     >
@@ -248,14 +243,12 @@ export const Drawer: React.FC<DrawerProps> = ({
                     </button>
                     <input
                       type="number"
-                      disabled={isView}
                       value={quantity}
                       onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
                       className="w-full text-center p-1 bg-transparent border-0 text-sm focus:outline-none"
                     />
                     <button
                       type="button"
-                      disabled={isView}
                       onClick={() => setQuantity(quantity + 1)}
                       className="px-3 py-1 bg-surface-container border-l-2 border-on-background font-bold text-on-background cursor-pointer text-sm"
                     >
@@ -268,7 +261,6 @@ export const Drawer: React.FC<DrawerProps> = ({
                   <label className="text-xs font-bold text-on-background block">数量单位</label>
                   <input
                     type="text"
-                    disabled={isView}
                     value={unit}
                     onChange={(e) => setUnit(e.target.value)}
                     placeholder="例如: 个, 瓶, 盒"
@@ -286,7 +278,6 @@ export const Drawer: React.FC<DrawerProps> = ({
                   </div>
                   <input
                     type="checkbox"
-                    disabled={isView}
                     checked={hasExpiry}
                     onChange={(e) => setHasExpiry(e.target.checked)}
                     className="w-4 h-4 rounded border-2 border-on-background accent-primary "
@@ -300,20 +291,18 @@ export const Drawer: React.FC<DrawerProps> = ({
                         <label className="text-[11px] text-outline block mb-1">采购筑巢日期</label>
                         <input
                           type="date"
-                          disabled={isView}
                           value={purchaseDate}
                           onChange={(e) => setPurchaseDate(e.target.value)}
-                          className="w-full p-2 border-2 border-on-background rounded-lg bg-white text-xs relative z-10 cursor-pointer disabled:cursor-not-allowed disabled:opacity-75 disabled:bg-surface-container"
+                          className="w-full p-2 border-2 border-on-background rounded-lg bg-white text-xs relative z-10 cursor-pointer"
                         />
                       </div>
                       <div>
                         <label className="text-[11px] text-outline block mb-1">保质期至 (底线)</label>
                         <input
                           type="date"
-                          disabled={isView}
                           value={expiryDate}
                           onChange={(e) => setExpiryDate(e.target.value)}
-                          className="w-full p-2 border-2 border-on-background rounded-lg bg-white text-xs border-dashed relative z-10 cursor-pointer disabled:cursor-not-allowed disabled:opacity-75 disabled:bg-surface-container"
+                          className="w-full p-2 border-2 border-on-background rounded-lg bg-white text-xs border-dashed relative z-10 cursor-pointer"
                         />
                       </div>
                     </div>
@@ -327,10 +316,9 @@ export const Drawer: React.FC<DrawerProps> = ({
                         type="range"
                         min="1"
                         max="30"
-                        disabled={isView}
                         value={remindDays}
                         onChange={(e) => setRemindDays(Number(e.target.value))}
-                        className="w-full accent-primary bg-surface-container relative z-10 cursor-pointer disabled:cursor-not-allowed"
+                        className="w-full accent-primary bg-surface-container relative z-10 cursor-pointer"
                       />
                     </div>
                   </div>
@@ -347,44 +335,40 @@ export const Drawer: React.FC<DrawerProps> = ({
                     <button
                       key={t}
                       type="button"
-                      disabled={isView}
                       onClick={() => handleRemoveTag(t)}
                       className="px-2 py-1 text-xs font-medium bg-secondary-container text-on-secondary-container border-2 border-on-background rounded-md flex items-center gap-1 active-press"
                     >
-                      #{t} {!isView && <span className="text-[9px]">×</span>}
+                      #{t} <span className="text-[9px]">×</span>
                     </button>
                   ))}
                   {tags.length === 0 && <span className="text-xs text-outline italic self-center">无贴纸...</span>}
                 </div>
-                {!isView && (
-                  <form onSubmit={handleAddTag} className="flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="快输入新标签添加..."
-                      value={newTag}
-                      onChange={(e) => setNewTag(e.target.value)}
-                      className="flex-1 p-2 border-2 border-on-background rounded-lg bg-white text-xs focus:outline-none"
-                    />
-                    <button
-                      type="submit"
-                      className="px-3.5 py-1.5 bg-secondary text-white text-xs border-2 border-on-background rounded-lg hover:bg-opacity-90 active-press cursor-pointer flex items-center gap-1"
-                    >
-                      <Plus size={12} /> 添加
-                    </button>
-                  </form>
-                )}
+                <form onSubmit={handleAddTag} className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="快输入新标签添加..."
+                    value={newTag}
+                    onChange={(e) => setNewTag(e.target.value)}
+                    className="flex-1 p-2 border-2 border-on-background rounded-lg bg-white text-xs focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    className="px-3.5 py-1.5 bg-secondary text-white text-xs border-2 border-on-background rounded-lg hover:bg-opacity-90 active-press cursor-pointer flex items-center gap-1"
+                  >
+                    <Plus size={12} /> 添加
+                  </button>
+                </form>
               </div>
 
               {/* Notes */}
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-on-background block">松鼠备忘录</label>
                 <textarea
-                  disabled={isView}
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
                   placeholder="写点松鼠提示，比如‘吃了半盒，剩下的开封了记得早点吃吱！’"
                   rows={3}
-                  className="w-full p-2.5 border-2 border-on-background rounded-xl bg-white text-sm focus:outline-none disabled:opacity-75 disabled:bg-surface-container"
+                  className="w-full p-2.5 border-2 border-on-background rounded-xl bg-white text-sm focus:outline-none"
                 />
               </div>
             </div>
@@ -395,9 +379,9 @@ export const Drawer: React.FC<DrawerProps> = ({
               </div>
             )}
 
-            {/* Sticky Actions in footer */}
+            {/* Sticky Actions in footer — always show save/delete for existing items */}
             <div className="p-4 border-t-2 border-on-background bg-surface-container flex items-center justify-between gap-3">
-              {item && !isView && (
+              {item && (
                 <button
                   disabled={isSaving}
                   onClick={() => {
@@ -414,38 +398,22 @@ export const Drawer: React.FC<DrawerProps> = ({
                 </button>
               )}
 
-              {isView && item && (
+              <div className="flex-1 flex justify-end gap-2">
                 <button
-                  onClick={() => {
-                    // Turn to edit
-                    // Yes, we edit inside the outer state
-                    onSave({ ...item, id: item.id });
-                    onClose();
-                  }}
-                  className="w-full flex items-center justify-center gap-1.5 bg-[#91f78e] font-display border-2 border-on-background px-4 py-2.5 text-xs rounded-xl active-press cursor-pointer font-bold text-on-background"
+                  onClick={onClose}
+                  className="px-4 py-2 border-2 border-on-background bg-white text-on-background font-display text-xs rounded-xl hover:bg-surface hover:border-black cursor-pointer"
                 >
-                  立刻改写这份档案
+                  放弃改动
                 </button>
-              )}
-
-              {!(isView) && (
-                <div className="flex-1 flex justify-end gap-2">
-                  <button
-                    onClick={onClose}
-                    className="px-4 py-2 border-2 border-on-background bg-white text-on-background font-display text-xs rounded-xl hover:bg-surface hover:border-black cursor-pointer"
-                  >
-                    放弃改动
-                  </button>
-                  <button
-                    onClick={handleSave}
-                    disabled={isSaving}
-                    className="flex items-center gap-1 bg-primary text-white font-display border-2 border-on-background hover:bg-opacity-95 px-5 py-2 text-xs rounded-xl active-press cursor-pointer hard-shadow-sm font-bold disabled:cursor-not-allowed disabled:opacity-60 disabled:translate-x-0 disabled:translate-y-0"
-                  >
-                    <Save size={14} />
-                    {isSaving ? "正在封存..." : "封存并归巢"}
-                  </button>
-                </div>
-              )}
+                <button
+                  onClick={handleSave}
+                  disabled={isSaving}
+                  className="flex items-center gap-1 bg-primary text-white font-display border-2 border-on-background hover:bg-opacity-95 px-5 py-2 text-xs rounded-xl active-press cursor-pointer hard-shadow-sm font-bold disabled:cursor-not-allowed disabled:opacity-60 disabled:translate-x-0 disabled:translate-y-0"
+                >
+                  <Save size={14} />
+                  {isSaving ? "正在封存..." : "封存并归巢"}
+                </button>
+              </div>
             </div>
           </motion.div>
         </>

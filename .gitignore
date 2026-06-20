@@ -3,3 +3,4 @@
 ./stitch_logo
 data/
 storage/
+.claude/hooks
