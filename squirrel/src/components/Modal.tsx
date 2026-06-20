@@ -12,7 +12,8 @@ interface ModalProps {
   type?: ModalType;
   variant?: ModalVariant;
   title?: string;
-  message: string;
+  message?: string;
+  children?: React.ReactNode;
   confirmText?: string;
   cancelText?: string;
 }
@@ -25,6 +26,7 @@ export const Modal: React.FC<ModalProps> = ({
   variant = "info",
   title,
   message,
+  children,
   confirmText = "确认",
   cancelText = "取消",
 }) => {
@@ -111,10 +113,14 @@ export const Modal: React.FC<ModalProps> = ({
                     </h3>
                   )}
 
-                  {/* Message */}
-                  <p className="text-sm text-on-background leading-relaxed px-2">
-                    {message}
-                  </p>
+                  {/* Message or custom content */}
+                  {children ? (
+                    <div className="w-full">{children}</div>
+                  ) : message ? (
+                    <p className="text-sm text-on-background leading-relaxed px-2">
+                      {message}
+                    </p>
+                  ) : null}
 
                   {/* Actions */}
                   <div className="flex gap-3 w-full pt-2">

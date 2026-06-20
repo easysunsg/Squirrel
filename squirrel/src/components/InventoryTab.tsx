@@ -1,9 +1,11 @@
 import React, { useState } from "react";
 import { InventoryItem, InventoryCategory, AppSettings } from "../types";
 import { getItemStatus, CATEGORY_MAP } from "../utils";
-import { 
-  Search, SlidersHorizontal, Plus, Calendar, 
-  MapPin, Tag, MoreVertical, X, AlertTriangle, Trash2
+import { Modal } from "./Modal";
+import {
+  Search, SlidersHorizontal, Plus, Calendar,
+  MapPin, Tag, MoreVertical, X, AlertTriangle, Trash2,
+  Minus, Plus as PlusIcon
 } from "lucide-react";
 
 interface InventoryProps {
@@ -11,7 +13,7 @@ interface InventoryProps {
   settings: AppSettings;
   onViewItem: (item: InventoryItem) => void;
   onEditItem: (item: InventoryItem) => void;
-  onDeleteItem: (id: string) => Promise<void> | void;
+  onQuickCleanItem: (id: string, consumeCount?: number) => Promise<void> | void;
   onCreateNewItem: () => void;
 }
 
@@ -20,13 +22,28 @@ export const InventoryTab: React.FC<InventoryProps> = ({
   settings,
   onViewItem,
   onEditItem,
-  onDeleteItem,
+  onQuickCleanItem,
   onCreateNewItem,
 }) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCat, setSelectedCat] = useState<string>("all");
   const [selectedLoc, setSelectedLoc] = useState<string>("all");
   const [sortBy, setSortBy] = useState<'expiry' | 'quantity' | 'name'>('expiry');
+
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    itemId: string;
+    itemName: string;
+    itemQuantity: number;
+    itemUnit: string;
+  }>({ isOpen: false, itemId: "", itemName: "", itemQuantity: 1, itemUnit: "个" });
+
+  const [consumeCount, setConsumeCount] = useState(1);
+
+  const [alertModal, setAlertModal] = useState<{
+    isOpen: boolean;
+    message: string;
+  }>({ isOpen: false, message: "" });
 
   const strategy = settings.expirationStrategy;
 
@@ -234,6 +251,25 @@ export const InventoryTab: React.FC<InventoryProps> = ({
                     ))}
                   </div>
                 )}
+
+                {/* Quick clean button */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConsumeCount(1);
+                    setConfirmModal({
+                      isOpen: true,
+                      itemId: item.id,
+                      itemName: item.name,
+                      itemQuantity: item.quantity,
+                      itemUnit: item.unit,
+                    });
+                  }}
+                  className="mt-2 px-2.5 py-1 bg-[#ffd5d1] hover:bg-[#ffe9e6] border-2 border-on-background text-[10px] text-error font-bold rounded-full cursor-pointer"
+                  title="标记吃完/清理"
+                >
+                  吃完/清掉
+                </button>
               </div>
             </div>
           );
@@ -250,6 +286,90 @@ export const InventoryTab: React.FC<InventoryProps> = ({
           </div>
         )}
       </div>
+
+      {/* Modals */}
+      <Modal
+        isOpen={confirmModal.isOpen}
+        onClose={() => setConfirmModal({ isOpen: false, itemId: "", itemName: "", itemQuantity: 1, itemUnit: "个" })}
+        onConfirm={() => {
+          const count = confirmModal.itemQuantity > 1 ? consumeCount : undefined;
+          void Promise.resolve(onQuickCleanItem(confirmModal.itemId, count)).catch((error) => {
+            console.error("Failed to quick clean item", error);
+            setAlertModal({
+              isOpen: true,
+              message: "清理失败，请确认后端服务已启动后重试。",
+            });
+          });
+        }}
+        type="confirm"
+        variant="warning"
+        title="确认清理"
+        confirmText={confirmModal.itemQuantity > 1 && consumeCount < confirmModal.itemQuantity ? `消耗 ${consumeCount}${confirmModal.itemUnit}` : "确认清理"}
+        cancelText="再想想"
+      >
+        {confirmModal.itemQuantity > 1 ? (
+          <div className="space-y-3">
+            <p className="text-sm text-on-background leading-relaxed px-2">
+              吱！【{confirmModal.itemName}】还有 <strong>{confirmModal.itemQuantity}{confirmModal.itemUnit}</strong>，要消耗多少呢？
+            </p>
+
+            {/* Consume all toggle */}
+            <label className="flex items-center justify-between p-3 border-2 border-on-background rounded-xl bg-surface cursor-pointer mx-2">
+              <div className="flex items-center gap-2">
+                <Trash2 size={14} className="text-red-600" />
+                <span className="text-sm font-display font-bold text-on-background">
+                  全部清除
+                </span>
+              </div>
+              <input
+                type="checkbox"
+                checked={consumeCount >= confirmModal.itemQuantity}
+                onChange={(e) => setConsumeCount(e.target.checked ? confirmModal.itemQuantity : 1)}
+                className="w-4 h-4 rounded border-2 border-on-background accent-primary"
+              />
+            </label>
+
+            {/* Partial consume count stepper */}
+            {consumeCount < confirmModal.itemQuantity && (
+              <div className="flex items-center justify-between p-3 border-2 border-on-background rounded-xl bg-white mx-2">
+                <span className="text-sm text-on-background">消耗数量</span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setConsumeCount(Math.max(1, consumeCount - 1))}
+                    className="p-1 hover:bg-surface rounded-lg transition-colors"
+                  >
+                    <Minus size={14} className="text-on-background" />
+                  </button>
+                  <span className="font-display font-extrabold text-sm w-8 text-center text-on-background">
+                    {consumeCount}
+                  </span>
+                  <button
+                    onClick={() => setConsumeCount(Math.min(confirmModal.itemQuantity, consumeCount + 1))}
+                    className="p-1 hover:bg-surface rounded-lg transition-colors"
+                  >
+                    <PlusIcon size={14} className="text-on-background" />
+                  </button>
+                  <span className="text-xs text-outline ml-0.5">
+                    {confirmModal.itemUnit}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="text-sm text-on-background leading-relaxed px-2">
+            吱！您确定已经吃完或清理了【{confirmModal.itemName}】，并从清单中删除吗？
+          </p>
+        )}
+      </Modal>
+
+      <Modal
+        isOpen={alertModal.isOpen}
+        onClose={() => setAlertModal({ isOpen: false, message: "" })}
+        type="alert"
+        variant="danger"
+        message={alertModal.message}
+      />
 
       {/* Desktop Floating Action Button */}
       <button

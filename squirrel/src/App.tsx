@@ -371,8 +371,28 @@ export default function App() {
     saveItemsToStorage(items.filter((item) => item.id !== id));
   };
 
-  const handleQuickCleanItem = async (id: string) => {
-    await handleDeleteItem(id);
+  const handleQuickCleanItem = async (id: string, consumeCount?: number) => {
+    const item = items.find((i) => i.id === id);
+    if (!item) return;
+
+    if (consumeCount && consumeCount < item.quantity) {
+      // Partial consumption: PATCH to reduce count
+      const newCount = item.quantity - consumeCount;
+      const newPct = Math.round((newCount / item.quantity) * 100);
+      const response = await fetch(`/api/items/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ count: newCount, remainingPct: newPct }),
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to update item: ${response.status}`);
+      }
+      const savedItem = normalizeServerItem((await response.json()) as ServerInventoryItem, 0);
+      saveItemsToStorage(items.map((i) => (i.id === id ? savedItem : i)));
+    } else {
+      // Full consumption: delete the item
+      await handleDeleteItem(id);
+    }
   };
 
   const appendChatMessage = (message: ChatMessage) => {
@@ -708,7 +728,7 @@ export default function App() {
                   setDrawerAction("edit");
                   setIsDrawerOpen(true);
                 }}
-                onDeleteItem={handleDeleteItem}
+                onQuickCleanItem={handleQuickCleanItem}
                 onCreateNewItem={handleCreateNewItem}
               />
             )}
