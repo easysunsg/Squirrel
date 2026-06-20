@@ -79,7 +79,12 @@ def guess_icon(title: str, space_name: str) -> str:
     return "package_2"
 
 
-def guess_expire_date(title: str) -> str:
+def guess_expire_date(title: str, category: str | None = None) -> str | None:
+    """Guess expire date based on title and category.
+    Returns None for non-consumable categories (book, electronics, other).
+    """
+    if category in ("book", "electronics", "other"):
+        return None
     if re.search(r"菜|肉|奶|酸奶|水果|香蕉|鸡蛋|面包", title):
         return days_from_now(5)
     if re.search(r"药|维", title):
@@ -254,7 +259,7 @@ def parse_lightning_text(text: str) -> list[Item]:
                 spaceName=space_name,
                 location=location,
                 remainingPct=remaining,
-                expireDate=guess_expire_date(title),
+                expireDate=guess_expire_date(title, category),
                 tag=tag,
                 count=count,
                 unit=unit,

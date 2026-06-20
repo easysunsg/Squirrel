@@ -178,13 +178,25 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <label className="text-[10px] text-outline mb-0.5 block">到期时间</label>
-                          <input
-                            type="date"
-                            value={item.expireDate || ""}
-                            onChange={(e) => updateItem(index, "expireDate", e.target.value)}
-                            disabled={isConfirming}
-                            className="w-full text-xs p-1.5 border-2 border-on-background rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer disabled:opacity-60"
-                          />
+                          <div className="flex gap-1">
+                            <input
+                              type="date"
+                              value={item.expireDate || ""}
+                              onChange={(e) => updateItem(index, "expireDate", e.target.value)}
+                              disabled={isConfirming}
+                              className="w-full text-xs p-1.5 border-2 border-on-background rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer disabled:opacity-60"
+                            />
+                            {item.expireDate ? (
+                              <button
+                                onClick={() => updateItem(index, "expireDate", "")}
+                                disabled={isConfirming}
+                                className="p-1.5 border-2 border-on-background rounded-lg hover:bg-surface active-press shrink-0 disabled:opacity-50 cursor-pointer"
+                                title="清除到期时间"
+                              >
+                                <X size={12} className="text-on-background" />
+                              </button>
+                            ) : null}
+                          </div>
                         </div>
                         <div>
                           <label className="text-[10px] text-outline mb-0.5 block">备注</label>
