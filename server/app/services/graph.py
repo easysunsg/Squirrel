@@ -2,6 +2,7 @@ import logging
 from typing import TypedDict
 
 from app.models.schemas import ChatOperation, ChatResult, Item, RecipeRequest
+from app.services.cache import get_recipe_cache, set_recipe_cache
 from app.services.llm import llm_service
 from app.services.markdown import item_status
 from app.services.parser import build_chat_result, extract_remaining_patch, extract_search_keyword, infer_search_terms, parse_lightning_text
@@ -15,6 +16,8 @@ class SquirrelGraphState(TypedDict, total=False):
     inventory: list[Item]
     chat_result: ChatResult
     recipe: dict
+    recipe_recommend: dict
+    user_preference: str
     # === 跨轮次物品选择交互状态（持久化到 SQLite conversation_state 表） ===
     interaction_mode: str          # "normal" | "item_select_confirm"
     pending_item_selection: list   # [{"index":1,"id":"...","title":"...","location":"...","spaceName":"...","count":1,"unit":"个","remainingPct":100,"consumeAll":false}]
@@ -700,47 +703,84 @@ def idle_query_node(state: SquirrelGraphState) -> SquirrelGraphState:
 
 
 def recipe_node(state: SquirrelGraphState) -> SquirrelGraphState:
-    """Generate recipe using LLM with rule-based fallback."""
+    """Generate recipe using LLM with structured recipe recommendation.
+
+    Collects expiring food items, sorts by urgency (expire_days ASC, quantity DESC),
+    and generates a structured recipe recommendation.
+    """
     inventory = state.get("inventory", [])
-    candidates = [item for item in inventory if item.spaceName in ("主厨房", "主冰箱")]
-    urgent = next((item for item in candidates if item_status(item) != "full"), None)
-    urgent = urgent or (candidates[0] if candidates else None)
 
-    # Try LLM generation
-    if llm_service.enabled:
-        try:
-            ingredients = [item.title for item in candidates[:10]]
-            urgent_item = urgent.title if urgent else None
-            recipe = llm_service.generate_recipe(ingredients, urgent_item)
-            logger.info("LLM recipe generation succeeded title=%s", recipe.get("title"))
-            return {
-                "chat_result": ChatResult(intent="recipe", replyText=recipe["description"]),
-                "recipe": recipe,
-                "current_context_item": None,
-            }
-        except Exception:
-            logger.exception("LLM recipe generation failed, falling back to template")
+    # === Build expiring food list ===
+    expiring_list = []
+    for item in inventory:
+        if item.category != "food":
+            continue
+        st = item_status(item)
+        expire_days = _calc_expire_days(item)
+        # Include items that are expired, warning, or fresh-but-close
+        if st != "full" or (item.expireDate and expire_days is not None and expire_days <= 7):
+            expiring_list.append({
+                "name": item.title,
+                "quantity": item.count,
+                "unit": item.unit,
+                "expire_days": expire_days or 0,
+            })
 
-    # Fallback to template
-    if not urgent:
-        recipe = {
-            "title": "清爽库存拼盘",
-            "description": "当前厨房库存较稳，可以选择现有食材做轻量整理餐。",
-            "ingredients": "现有食材适量，常备调味料少许",
-            "steps": ["检查食材状态", "清洗切配", "按口味凉拌或快速加热"],
+    # Sort: expire_days ASC (most urgent first), quantity DESC (more left = higher priority)
+    expiring_list.sort(key=lambda x: (x["expire_days"], -x["quantity"]))
+    expiring_list = expiring_list[:10]  # cap at 10
+
+    # Build user preference string from state if available
+    pref = state.get("user_preference", "无特殊要求")
+
+    # === Check cache ===
+    cached = get_recipe_cache(expiring_list, pref)
+    if cached:
+        return {
+            "chat_result": ChatResult(
+                intent="recipe",
+                replyText=cached.get("recipe_recommend", {}).get("intro", "菜谱已生成"),
+            ),
+            "recipe_recommend": cached,
+            "recipe": cached,
+            "current_context_item": None,
         }
+
+    # === Generate via LLM ===
+    result = llm_service.generate_expiring_recipe(expiring_list, pref)
+
+    # Cache successful (non-fallback) results
+    if not result.get("isFallback") and result.get("recipe_recommend"):
+        set_recipe_cache(expiring_list, pref, result)
+
+    # === Build reply text ===
+    if result.get("isFallback") and result.get("fallbackText"):
+        reply = result["fallbackText"]
+    elif result.get("recipe_recommend"):
+        rec = result["recipe_recommend"]
+        reply = rec.get("intro", "菜谱已生成")
     else:
-        recipe = {
-            "title": f"{urgent.title}快手消耗餐",
-            "description": f"优先消耗 {urgent.title}，减少临期浪费。",
-            "ingredients": f"{urgent.title} {urgent.count}{urgent.unit}，常备调味料适量",
-            "steps": ["确认食材没有变质", "清洗并简单处理", "中火快速烹调或搭配主食食用"],
-        }
+        reply = "暂无足够的食材信息生成菜谱，请先添加一些食材到库存吧。"
+
     return {
-        "chat_result": ChatResult(intent="recipe", replyText=recipe["description"]),
-        "recipe": recipe,
+        "chat_result": ChatResult(intent="recipe", replyText=reply),
+        "recipe_recommend": result,
+        "recipe": result,
         "current_context_item": None,
     }
+
+
+def _calc_expire_days(item: Item) -> int | None:
+    """Calculate remaining days until expiry. Negative means expired."""
+    if not item.expireDate:
+        return None
+    from datetime import date, datetime
+    try:
+        expiry = datetime.strptime(item.expireDate, "%Y-%m-%d").date()
+        delta = (expiry - date.today()).days
+        return delta
+    except (ValueError, TypeError):
+        return None
 
 
 def chat_node(state: SquirrelGraphState) -> SquirrelGraphState:
@@ -863,6 +903,7 @@ def run_squirrel_graph(
     pending_operation: dict | None = None,
     last_added_item: dict | None = None,
     current_context_item: dict | None = None,
+    user_preference: str = "无特殊要求",
 ) -> SquirrelGraphState:
     """支持跨轮次选择状态传递。"""
     return squirrel_graph.invoke({
@@ -873,4 +914,5 @@ def run_squirrel_graph(
         "pending_operation": pending_operation,
         "last_added_item": last_added_item,
         "current_context_item": current_context_item,
+        "user_preference": user_preference,
     })

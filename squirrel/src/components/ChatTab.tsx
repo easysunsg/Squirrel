@@ -45,10 +45,12 @@ export const ChatTab: React.FC<ChatProps> = ({
 
   useEffect(() => {
     if (preinput) {
-      setInputText(preinput);
+      const text = preinput;
       onClearPreinput();
+      // Auto-send directly without setting input text so the box stays clean
+      void onSendMessage(text);
     }
-  }, [onClearPreinput, preinput]);
+  }, [onClearPreinput, onSendMessage, preinput]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });

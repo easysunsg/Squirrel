@@ -154,3 +154,21 @@ class RecipeRequest(BaseModel):
     inventory: list[Item] = Field(default_factory=list)
     excludedRecipeTitle: str | None = None
     systemPreferences: SystemPreferences | None = None
+
+
+class RecipeCard(BaseModel):
+    recipe_name: str
+    core_expiring_food: list[str]
+    other_ingredients: list[str]
+    cooking_steps: list[str]
+    estimated_time: str
+    difficulty: str
+    waste_tip: str
+
+
+class RecipeRecommendResult(BaseModel):
+    title: str
+    subtitle: str
+    intro: str
+    recipe_list: list[RecipeCard]
+    summary_tip: str

@@ -599,6 +599,8 @@ export default function App() {
     { id: "settings", label: "控制台", icon: SettingsIcon },
   ];
 
+  const allLocations = [...new Set([...settings.selectedLocations, ...items.map(i => i.location).filter(Boolean)])];
+
   return (
     <div className="min-h-screen bg-background bg-paper text-on-background font-sans flex flex-col md:flex-row">
       <Drawer
@@ -606,7 +608,7 @@ export default function App() {
         onClose={() => setIsDrawerOpen(false)}
         action={drawerAction}
         item={selectedDrawerItem}
-        locations={settings.selectedLocations}
+        locations={allLocations}
         onSave={handleSaveItem}
         onDelete={handleDeleteItem}
       />

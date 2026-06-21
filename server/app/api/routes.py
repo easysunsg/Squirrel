@@ -656,7 +656,8 @@ def clear_messages():
 def recipe(request: RecipeRequest):
     with connect() as conn:
         inventory = request.inventory or list_items(conn)
-    return {"recipe": ai_service.recipe(request, inventory)}
+    result = ai_service.recipe(request, inventory)
+    return {"recipe_recommend": result.get("recipe_recommend"), "isFallback": result.get("isFallback", True), "fallbackText": result.get("fallbackText")}
 
 
 @router.post("/export")

@@ -82,3 +82,21 @@ export interface ConsumeConfirmState {
   consumeAll: boolean;
   replyText: string;
 }
+
+export interface RecipeCard {
+  recipe_name: string;
+  core_expiring_food: string[];
+  other_ingredients: string[];
+  cooking_steps: string[];
+  estimated_time: string;
+  difficulty: string;
+  waste_tip: string;
+}
+
+export interface RecipeRecommend {
+  title: string;
+  subtitle: string;
+  intro: string;
+  recipe_list: RecipeCard[];
+  summary_tip: string;
+}

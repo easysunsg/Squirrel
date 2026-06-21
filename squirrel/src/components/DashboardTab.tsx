@@ -1,12 +1,13 @@
-import React, { useState } from "react";
-import { InventoryItem, AppSettings } from "../types";
+import React, { useState, useRef } from "react";
+import { InventoryItem, AppSettings, RecipeRecommend } from "../types";
 import SquirrelLogo from "./SquirrelLogo";
 import { getItemStatus, CATEGORY_MAP } from "../utils";
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import {
   AlertTriangle, CheckCircle, Apple, AlertOctagon, Sparkles,
   ArrowRight, Search, ClipboardList, Lightbulb, ChefHat,
-  Minus, Plus, Trash2
+  Minus, Plus, Trash2, ChevronDown, ChevronUp, Copy,
+  Loader2, Clock
 } from "lucide-react";
 import { Modal } from "./Modal";
 
@@ -42,6 +43,14 @@ export const DashboardTab: React.FC<DashboardProps> = ({
     message: string;
   }>({ isOpen: false, message: "" });
 
+  // Recipe recommendation state
+  const [recipeRecommend, setRecipeRecommend] = useState<RecipeRecommend | null>(null);
+  const [isLoadingRecipe, setIsLoadingRecipe] = useState(false);
+  const [recipeError, setRecipeError] = useState<string | null>(null);
+  const [expandedRecipe, setExpandedRecipe] = useState<number | null>(null);
+  const [isRecipeCollapsed, setIsRecipeCollapsed] = useState(false);
+  const lastRecipeClick = useRef(0);
+
   // Compute statuses
   const strategy = settings.expirationStrategy;
   
@@ -58,23 +67,62 @@ export const DashboardTab: React.FC<DashboardProps> = ({
   // Get food items about to expire
   const warningFood = warning.filter(i => i.category === "food");
   
-  const handleAskRecipe = () => {
-    let message = "推荐用我们树洞里现有的食材 ";
-    if (warningFood.length > 0) {
-      const names = warningFood.map(f => `【${f.name}】`).join("、");
-      message += `${names}（临期了，急需吃掉吱）`;
-    } else {
-      const freshFood = fresh.filter(i => i.category === "food").slice(0, 2);
-      if (freshFood.length > 0) {
-        const names = freshFood.map(f => `【${f.name}】`).join("、");
-        message += `加 ${names}`;
+  const handleAskRecipe = async () => {
+    // 3s debounce
+    const now = Date.now();
+    if (now - lastRecipeClick.current < 3000 || isLoadingRecipe) return;
+    lastRecipeClick.current = now;
+
+    setIsLoadingRecipe(true);
+    setRecipeError(null);
+    setRecipeRecommend(null);
+    setIsRecipeCollapsed(false);
+
+    try {
+      const response = await fetch("/api/recipe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inventory: items.filter(i => i.category === "food").map(i => ({
+            title: i.name,
+            category: i.category,
+            count: i.quantity,
+            unit: i.unit,
+            expireDate: i.expiryDate,
+            spaceName: i.location,
+            location: i.location,
+            tags: i.tags,
+            remark: i.note,
+          })),
+          systemPreferences: {
+            allergies: settings.dietaryHabits,
+          },
+        }),
+      });
+
+      if (!response.ok) throw new Error(`请求失败: ${response.status}`);
+
+      const data = await response.json();
+      if (data.recipe_recommend) {
+        setRecipeRecommend(data.recipe_recommend);
+      } else if (data.fallbackText) {
+        setRecipeError(data.fallbackText);
       } else {
-        message += "松子和一些坚果";
+        setRecipeError("吱？本松的菜谱小本本暂时没找到合适的搭配～请稍后再试试！");
       }
+    } catch (error) {
+      console.error("Failed to fetch recipe", error);
+      // Level-2 fallback: show expiring ingredients list
+      const warningFoodItems = warningFood.filter(f => f.category === "food");
+      const names = warningFoodItems.map(f => f.name).join("、");
+      setRecipeError(
+        names
+          ? `已为你筛选出临期食材：${names}，建议优先食用；你可以告诉我想吃的菜品类型，我来为你推荐做法～`
+          : "后端暂时不可用，无法生成菜谱推荐。请稍后再试吱！"
+      );
+    } finally {
+      setIsLoadingRecipe(false);
     }
-    message += " 做个美味可口的松鼠创意料理，别忘照顾一下本松的习惯 " + settings.dietaryHabits.join("、") + " 哦！";
-    onSetChatPreinput(message);
-    onNavigateToTab("chat");
   };
 
   const handleAskInspect = (loc: string) => {
@@ -269,9 +317,9 @@ export const DashboardTab: React.FC<DashboardProps> = ({
           </div>
         </div>
 
-        {/* Right column: Dynamic cooking helpers & location inquiries */}
+		{/* Right column: Dynamic cooking helpers & location inquiries */}
         <div className="col-span-1 lg:col-span-2 space-y-5">
-          {/* Squirrel Recipes block */}
+          {/* Squirrel Recipes block — inline recipe cards */}
           <div className="bg-[#98f28d] border-[3px] border-on-background shadow-[4px_5px_0_0_#1b1c1c] rounded-[28px] p-5 space-y-3 relative overflow-hidden">
             <div className="absolute top-0 right-0 w-16 h-16 bg-secondary opacity-5 rounded-full" />
             <div className="flex items-center gap-2">
@@ -282,34 +330,208 @@ export const DashboardTab: React.FC<DashboardProps> = ({
               </div>
             </div>
 
-            <div className="space-y-1.5 pt-1.5 text-xs text-on-background text-justify">
-              <p className="leading-relaxed">
-                {warningFood.length > 0 ? (
-                  <>
-                    吱吱！本松雷达识别到您手头有临期的食材：
-                    <strong className="text-primary font-bold">
-                      {warningFood.map(f => f.name).join("、")}
-                    </strong>
-                    。让金牌松鼠大管家立刻为您拟定一份完美解决胃口、规避过敏原的特制零浪费菜谱吧！
-                  </>
-                ) : (
-                  <>
-                    暂无临期食材警报，但别等快坏了再想呀！点下方按钮，本松随时结合你登记的
-                    <strong className="text-secondary font-bold">
-                       {settings.dietaryHabits.length > 0 ? settings.dietaryHabits.join("、") : "无刺激"} 
-                    </strong>
-                    饮食限制来给你推荐营养轻餐哦。
-                  </>
-                )}
-              </p>
-            </div>
+            {/* Loading state — animated progress */}
+            {isLoadingRecipe && (
+              <div className="space-y-2 py-3 text-center">
+                <Loader2 size={24} className="animate-spin mx-auto text-[#0f5c1d]" />
+                <p className="text-xs text-[#18351d] font-semibold animate-pulse">
+                  松鼠正在翻菜谱小本本...
+                </p>
+              </div>
+            )}
 
-            <button
-              onClick={handleAskRecipe}
-              className="w-full flex items-center justify-center gap-1 bg-[#1f1f1f] hover:bg-primary border-2 border-on-background text-white text-xs font-display font-bold py-2 px-4 rounded-full shadow-[2px_3px_0_0_#1b1c1c] active-press cursor-pointer"
-            >
-              <Sparkles size={13} className="text-white" /> 让松鼠写份创意菜单吱！
-            </button>
+            {/* Error / Fallback state */}
+            {recipeError && !isLoadingRecipe && (
+              <div className="bg-[#fff27a] border-2 border-[#8f7a00] rounded-[22px] p-3 text-xs text-[#4f4500] leading-relaxed">
+                <p>{recipeError}</p>
+                {!isLoadingRecipe && (
+                  <button
+                    onClick={handleAskRecipe}
+                    className="mt-2 w-full bg-[#1f1f1f] hover:bg-primary text-white border-2 border-on-background text-xs font-bold py-1.5 rounded-full shadow-[2px_3px_0_0_#1b1c1c] active-press"
+                  >
+                    再试一次
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Recipe recommendation cards */}
+            {recipeRecommend && !isLoadingRecipe && (
+              <div className="space-y-3">
+                {/* Title + subtitle */}
+                <div className="space-y-1">
+                  <h5 className="font-display font-extrabold text-sm text-on-background">{recipeRecommend.title}</h5>
+                  <p className="text-[10px] text-[#4a6b3a] font-medium italic">{recipeRecommend.subtitle}</p>
+                </div>
+
+                {/* Intro */}
+                <p className="text-xs text-on-background leading-relaxed">{recipeRecommend.intro}</p>
+
+                {/* Recipe cards list */}
+                <div className={`space-y-2 overflow-hidden transition-all duration-300 ${isRecipeCollapsed ? 'max-h-0' : 'max-h-[600px]'} overflow-y-auto pr-1 scrollbar-hide`}>
+                  {recipeRecommend.recipe_list.map((card, idx) => (
+                    <div
+                      key={idx}
+                      className="bg-white border-2 border-on-background rounded-[20px] p-3 shadow-[2px_3px_0_0_#1b1c1c] space-y-2"
+                    >
+                      {/* Card header: name + difficulty + time */}
+                      <div className="flex items-start justify-between gap-2">
+                        <h6 className="font-display font-bold text-xs text-on-background flex-1">
+                          {idx + 1}. {card.recipe_name}
+                        </h6>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className={`text-[9px] px-2 py-0.5 rounded-full border border-on-background font-bold ${
+                            card.difficulty === "简单" ? "bg-[#98f28d] text-[#0f5c1d]" :
+                            card.difficulty === "中等" ? "bg-[#ffe92e] text-[#665800]" :
+                            "bg-[#ffd5d1] text-[#8f1c17]"
+                          }`}>
+                            {card.difficulty}
+                          </span>
+                          <span className="text-[9px] text-outline flex items-center gap-0.5">
+                            <Clock size={10} /> {card.estimated_time}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Core expiring food tags */}
+                      {card.core_expiring_food.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {card.core_expiring_food.map((food, fi) => (
+                            <span key={fi} className="text-[9px] bg-red-100 text-red-700 border border-red-300 px-1.5 py-0.5 rounded-full font-bold">
+                              🕐 {food}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Other ingredients */}
+                      {card.other_ingredients.length > 0 && (
+                        <p className="text-[9px] text-outline">
+                          <span className="font-bold text-on-background">其他食材：</span>
+                          {card.other_ingredients.join("、")}
+                        </p>
+                      )}
+
+                      {/* Expandable cooking steps */}
+                      <button
+                        onClick={() => setExpandedRecipe(expandedRecipe === idx ? null : idx)}
+                        className="flex items-center gap-1 text-[9px] font-bold text-on-background hover:text-primary w-full justify-center"
+                      >
+                        {expandedRecipe === idx ? "收起步骤" : "查看烹饪步骤"}
+                        {expandedRecipe === idx ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                      </button>
+
+                      <AnimatePresence>
+                        {expandedRecipe === idx && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            className="overflow-hidden"
+                          >
+                            <ol className="space-y-1.5 pl-2">
+                              {card.cooking_steps.map((step, si) => (
+                                <li key={si} className="text-[10px] text-on-background flex gap-1.5">
+                                  <span className="font-bold text-primary shrink-0">{si + 1}.</span>
+                                  <span>{step}</span>
+                                </li>
+                              ))}
+                            </ol>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+
+                      {/* Waste tip */}
+                      <div className="bg-[#f0f7ec] border border-[#8faa7a] rounded-[14px] p-2">
+                        <p className="text-[9px] text-[#3d6b2e] leading-relaxed">
+                          <span className="font-bold">💚 零浪费小贴士：</span>
+                          {card.waste_tip}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Summary tip */}
+                <div className="bg-[#1f1f1f] border-2 border-on-background rounded-[20px] p-3">
+                  <p className="text-[10px] text-white leading-relaxed">
+                    💡 {recipeRecommend.summary_tip}
+                  </p>
+                </div>
+
+                {/* Disclaimer */}
+                <p className="text-[8px] text-[#8f1c17] text-center leading-tight">
+                  ⚠️ 菜谱仅供参考，若食材出现变质、异味请立即丢弃，请勿食用过期食品。
+                </p>
+
+                {/* Toggle collapse + copy buttons */}
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setIsRecipeCollapsed(!isRecipeCollapsed)}
+                    className="flex-1 flex items-center justify-center gap-1 bg-surface border-2 border-on-background text-[10px] font-bold py-2 rounded-full shadow-[2px_3px_0_0_#1b1c1c] active-press"
+                  >
+                    {isRecipeCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+                    {isRecipeCollapsed ? "展开菜谱" : "收起菜谱"}
+                  </button>
+                  <button
+                    onClick={() => {
+                      const text = recipeRecommend.recipe_list.map((c, i) =>
+                        `${i + 1}. ${c.recipe_name}\n${c.cooking_steps.map(s => `  - ${s}`).join("\n")}`
+                      ).join("\n\n");
+                      navigator.clipboard.writeText(text).catch(() => {});
+                    }}
+                    className="flex items-center gap-1 bg-primary text-white border-2 border-on-background text-[10px] font-bold px-3 py-2 rounded-full shadow-[2px_3px_0_0_#1b1c1c] active-press"
+                    title="复制菜谱"
+                  >
+                    <Copy size={11} /> 复制菜谱
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Initial / idle state — only show when no recipe loaded, loading, or error */}
+            {!recipeRecommend && !isLoadingRecipe && !recipeError && (
+              <>
+                <div className="space-y-1.5 pt-1.5 text-xs text-on-background text-justify">
+                  <p className="leading-relaxed">
+                    {warningFood.length > 0 ? (
+                      <>
+                        吱吱！本松雷达识别到您手头有临期的食材：
+                        <strong className="text-primary font-bold">
+                          {[...new Set(warningFood.map(f => f.name))].join("、")}
+                        </strong>
+                        。让金牌松鼠大管家立刻为您拟定一份完美解决胃口、规避过敏原的特制零浪费菜谱吧！
+                      </>
+                    ) : (
+                      <>
+                        暂无临期食材警报，但别等快坏了再想呀！点下方按钮，本松随时结合你登记的
+                        <strong className="text-secondary font-bold">
+                           {settings.dietaryHabits.length > 0 ? settings.dietaryHabits.join("、") : "无特殊"}
+                        </strong>
+                        饮食限制来给你推荐营养轻餐哦。
+                      </>
+                    )}
+                  </p>
+                </div>
+
+                <button
+                  onClick={handleAskRecipe}
+                  className="w-full flex items-center justify-center gap-1 bg-[#1f1f1f] hover:bg-primary border-2 border-on-background text-white text-xs font-display font-bold py-2 px-4 rounded-full shadow-[2px_3px_0_0_#1b1c1c] active-press cursor-pointer"
+                >
+                  <Sparkles size={13} className="text-white" /> 让松鼠写份创意菜单吱！
+                </button>
+              </>
+            )}
+
+            {/* Loading button (during generation) */}
+            {isLoadingRecipe && (
+              <button
+                disabled
+                className="w-full flex items-center justify-center gap-1 bg-[#1f1f1f] opacity-70 border-2 border-on-background text-white text-xs font-display font-bold py-2 px-4 rounded-full shadow-[2px_3px_0_0_#1b1c1c] cursor-not-allowed"
+              >
+                <Loader2 size={13} className="animate-spin" /> 松鼠正在翻菜谱...
+              </button>
+            )}
           </div>
 
           {/* Quick interactive search prompts */}
@@ -336,7 +558,7 @@ export const DashboardTab: React.FC<DashboardProps> = ({
 
               <button
                 onClick={() => {
-                  onSetChatPreinput("有何常备药可以常驻玄关柜？哪些已经快干涸啦？吱！");
+                  onSetChatPreinput("感冒常备药怎么在树梢归档？");
                   onNavigateToTab("chat");
                 }}
                 className="w-full text-left p-2.5 bg-surface hover:bg-[#ffe92e] border-2 border-on-background rounded-full text-xs flex items-center justify-between active-press"
