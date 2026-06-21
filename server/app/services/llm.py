@@ -18,6 +18,7 @@ RECIPE_RECOMMEND_PROMPT = """
 1. 临期食材清单：{expiring_food_list}
    （格式为数组，每项包含：name=食材名称, quantity=剩余数量, unit=单位, expire_days=剩余保质期天数）
 2. 用户饮食偏好/忌口：{user_preference}（无则为"无特殊要求"）
+3. 用户的每日提醒时间：{reminder_time}（一天中最方便处理食材的时段，据此推荐适合该时段的菜品，如提醒时间为18:00则推荐晚餐食谱）
 
 ## 输出Schema（严格遵守，字段不可新增/删减/修改类型）
 ```json
@@ -315,7 +316,7 @@ class LLMService:
             return "我理解你的意思了。你可以让我录入物品、查位置、列临期或生成菜谱。"
 
 
-    def generate_expiring_recipe(self, expiring_food_list: list[dict], user_preference: str = "无特殊要求") -> dict:
+    def generate_expiring_recipe(self, expiring_food_list: list[dict], user_preference: str = "无特殊要求", reminder_time: str = "") -> dict:
         """Generate structured recipe recommendations from expiring ingredients.
 
         Returns:
@@ -334,6 +335,7 @@ class LLMService:
         prompt = RECIPE_RECOMMEND_PROMPT.format(
             expiring_food_list=json.dumps(expiring_food_list, ensure_ascii=False),
             user_preference=user_preference,
+            reminder_time=reminder_time or "未设置",
         )
 
         messages = [

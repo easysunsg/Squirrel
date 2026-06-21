@@ -96,6 +96,7 @@ export const DashboardTab: React.FC<DashboardProps> = ({
           })),
           systemPreferences: {
             allergies: settings.dietaryHabits,
+            reminderTime: settings.reminderTime,
           },
         }),
       });

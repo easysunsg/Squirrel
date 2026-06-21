@@ -33,14 +33,17 @@ class AiService:
     def recipe(self, request: RecipeRequest, inventory: list[Item]) -> dict:
         # Build user_preference from system preferences
         pref = "无特殊要求"
+        reminder_time = ""
         if request.systemPreferences:
             habits = request.systemPreferences.allergies or []
             pref = "、".join(habits) if habits else "无特殊要求"
+            reminder_time = request.systemPreferences.reminderTime or ""
 
         result = run_squirrel_graph(
             "菜谱",
             inventory=request.inventory or inventory,
             user_preference=pref,
+            reminder_time=reminder_time,
         )
         return result.get("recipe_recommend", result.get("recipe", {}))
 

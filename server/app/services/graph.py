@@ -18,6 +18,7 @@ class SquirrelGraphState(TypedDict, total=False):
     recipe: dict
     recipe_recommend: dict
     user_preference: str
+    reminder_time: str
     # === 跨轮次物品选择交互状态（持久化到 SQLite conversation_state 表） ===
     interaction_mode: str          # "normal" | "item_select_confirm"
     pending_item_selection: list   # [{"index":1,"id":"...","title":"...","location":"...","spaceName":"...","count":1,"unit":"个","remainingPct":100,"consumeAll":false}]
@@ -732,9 +733,10 @@ def recipe_node(state: SquirrelGraphState) -> SquirrelGraphState:
 
     # Build user preference string from state if available
     pref = state.get("user_preference", "无特殊要求")
+    reminder_time = state.get("reminder_time", "")
 
-    # === Check cache ===
-    cached = get_recipe_cache(expiring_list, pref)
+    # === Check cache (includes reminder_time in key) ===
+    cached = get_recipe_cache(expiring_list, pref, reminder_time)
     if cached:
         return {
             "chat_result": ChatResult(
@@ -749,9 +751,9 @@ def recipe_node(state: SquirrelGraphState) -> SquirrelGraphState:
     # === Generate via LLM ===
     result = llm_service.generate_expiring_recipe(expiring_list, pref)
 
-    # Cache successful (non-fallback) results
+    # Cache successful (non-fallback) results with reminder_time in key
     if not result.get("isFallback") and result.get("recipe_recommend"):
-        set_recipe_cache(expiring_list, pref, result)
+        set_recipe_cache(expiring_list, pref, result, reminder_time)
 
     # === Build reply text ===
     if result.get("isFallback") and result.get("fallbackText"):
@@ -904,6 +906,7 @@ def run_squirrel_graph(
     last_added_item: dict | None = None,
     current_context_item: dict | None = None,
     user_preference: str = "无特殊要求",
+    reminder_time: str = "",
 ) -> SquirrelGraphState:
     """支持跨轮次选择状态传递。"""
     return squirrel_graph.invoke({
@@ -915,4 +918,5 @@ def run_squirrel_graph(
         "last_added_item": last_added_item,
         "current_context_item": current_context_item,
         "user_preference": user_preference,
+        "reminder_time": reminder_time,
     })
