@@ -84,6 +84,9 @@ class ChatResult(BaseModel):
     confirmedAllItems: bool = False     # 用户选择"全部"
     confirmedDeductCount: int | None = None  # 用户消耗数量（None=全部消耗）
     confirmedPatch: dict[str, Any] | None = None  # 确认后要执行的属性修改（如 {"location": "冰箱上层"}）
+    # === 多选支持（新增） ===
+    confirmedItemIds: list[str] = Field(default_factory=list)  # 用户确认选择的多个物品 ID（多选）
+    confirmedDeductCounts: dict[str, int] = Field(default_factory=dict)  # 每个物品的扣减数量 {item_id: count}
 
 
 class ConfirmRequest(BaseModel):

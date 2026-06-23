@@ -314,6 +314,15 @@ def delete_item(conn: sqlite3.Connection, item_id: str) -> bool:
     return cur.rowcount > 0
 
 
+def delete_items_batch(conn: sqlite3.Connection, item_ids: list[str]) -> int:
+    """Delete multiple items by ID. Returns total count of deleted rows."""
+    total = 0
+    for item_id in item_ids:
+        cur = conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+        total += cur.rowcount
+    return total
+
+
 def replace_spaces(conn: sqlite3.Connection, spaces: list[Space]) -> None:
     conn.execute("DELETE FROM spaces")
     for space in spaces:

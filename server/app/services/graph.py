@@ -54,22 +54,39 @@ def route_mode(state: SquirrelGraphState) -> str:
 
     若 interaction_mode = item_select_confirm，跳过 classify_intent，
     直接进入确认选择 / 重置 / 无效输入节点。
+    支持多选输入（逗号分隔、范围、口语化表达）。
     """
     mode = state.get("interaction_mode", "normal")
     if mode == "item_select_confirm":
         text = state.get("text", "").strip()
         selection = state.get("pending_item_selection", [])
-        # 如果输入是非数字的新查询（不是选择响应），自动重置到 normal
-        if text and not text.isdigit() and text not in ("取消", "退出", "全部"):
-            # 检查是否有可用的 pending_item_selection，如果没有选择项则用户可能已经清空了
+        if not text:
             return "classify_intent"
-        if text in ("取消", "退出"):
+        if text in ("取消", "退出", "不选了"):
             return "reset_selection"
-        if text == "全部" and selection:
+
+        # 使用解析器判断输入类型
+        from app.services.parser import parse_multi_selection
+        parsed = parse_multi_selection(text, len(selection))
+
+        if parsed == "all" and selection:
             return "confirm_selection_all"
-        if text.isdigit() and 1 <= int(text) <= len(selection):
-            return "confirm_selection"
-        return "invalid_selection"
+        if parsed == "cancel":
+            return "reset_selection"
+        if isinstance(parsed, list) and len(parsed) > 0:
+            # 检查是否所有序号都在有效范围内
+            valid_count = sum(1 for i in parsed if 0 <= i < len(selection))
+            if valid_count == 0:
+                # 所有序号都超出范围
+                return "invalid_selection"
+            # 单个有效数字且在范围内 → 单选（向后兼容）
+            if text.isdigit() and len(parsed) == 1 and 1 <= int(text) <= len(selection):
+                return "confirm_selection"
+            # 多选或部分有效
+            return "confirm_multi_selection"
+        if isinstance(parsed, list) and len(parsed) == 0:
+            # 空列表（理论上不会发生，过滤用）
+            return "invalid_selection"
     return "classify_intent"
 
 
@@ -341,28 +358,51 @@ def consume_node(state: SquirrelGraphState) -> SquirrelGraphState:
             "pending_item_selection": [{
                 "id": item.id, "title": item.title, "spaceName": item.spaceName,
                 "location": item.location, "count": item.count, "unit": item.unit,
-                "remainingPct": item.remainingPct, "consumeAll": consume_all, "deductCount": None,
+                "remainingPct": item.remainingPct, "consumeAll": consume_all, "deductCount": deduct_count,
+                "expire_date": item.expireDate or "",
+                "expire_days": _calc_expire_days(item),
             }],
             "current_context_item": ctx_item,
         }
 
     # === 多候选：进入序号选择流程 ===
     candidates = candidates[:6]
+    # 按临期升序 → 数量降序排序
+    candidates.sort(key=lambda it: (_calc_expire_days(it) if _calc_expire_days(it) is not None else 9999, -it.count))
+
     pending_selection = []
+    total_deduct = None
+    if operations and operations[0].patch:
+        total_deduct = operations[0].patch.get("deductCount")
     for item in candidates:
         deduct_count = _calc_deduct(item)
         pending_selection.append({
             "id": item.id, "title": item.title, "spaceName": item.spaceName,
             "location": item.location, "count": item.count, "unit": item.unit,
             "remainingPct": item.remainingPct, "consumeAll": consume_all, "deductCount": deduct_count,
+            "expire_date": item.expireDate or "",
+            "expire_days": _calc_expire_days(item),
         })
 
-    lines = [f"找到 {len(candidates)} 个匹配物品，请回复序号选择："]
+    lines = [f"找到 {len(candidates)} 个匹配的「{target}」，请回复序号选择（支持多选，如「1,2」「全部」）："]
     for i, item in enumerate(candidates, 1):
         unit_part = f"{item.count}{item.unit}" if item.count else ""
-        lines.append(f"{i}. {item.title} — {item.spaceName}/{item.location} ({unit_part})")
+        days = _calc_expire_days(item)
+        if days is not None:
+            expire_str = f"{item.expireDate}到期（剩余{days}天"
+            if days <= 3:
+                expire_str += " ⚠️即将过期"
+            expire_str += "）"
+        else:
+            expire_str = "无过期信息"
+        lines.append(f"{i}. {item.title} — {item.spaceName}/{item.location} ({unit_part}，{expire_str})")
     if consume_all:
         lines.append("回复「全部」将清除所有匹配项")
+
+    # 保存 pending_operation 供多选节点使用
+    pending_op = None
+    if total_deduct is not None:
+        pending_op = {"type": "consume", "deductCount": total_deduct, "target": target}
 
     return {
         "chat_result": ChatResult(
@@ -377,6 +417,7 @@ def consume_node(state: SquirrelGraphState) -> SquirrelGraphState:
         ),
         "interaction_mode": "item_select_confirm",
         "pending_item_selection": pending_selection,
+        "pending_operation": pending_op,
     }
 
 
@@ -567,12 +608,22 @@ def update_location_node(state: SquirrelGraphState) -> SquirrelGraphState:
             "unit": item.unit,
             "remainingPct": item.remainingPct,
             "consumeAll": False,
+            "expire_date": item.expireDate or "",
+            "expire_days": _calc_expire_days(item),
         })
 
-    lines = [f"找到 {len(candidates)} 个匹配物品，请回复序号选择要调整的物品："]
+    lines = [f"找到 {len(candidates)} 个匹配物品，请回复序号选择要调整的物品（支持多选，如「1,2」）："]
     for i, item in enumerate(candidates, 1):
         unit_part = f"{item.count}{item.unit}" if item.count else ""
-        lines.append(f"{i}. {item.title} — {item.spaceName}/{item.location} ({unit_part})")
+        days = _calc_expire_days(item)
+        if days is not None:
+            expire_str = f"{item.expireDate}到期（剩余{days}天"
+            if days <= 3:
+                expire_str += " ⚠️即将过期"
+            expire_str += "）"
+        else:
+            expire_str = "无过期信息"
+        lines.append(f"{i}. {item.title} — {item.spaceName}/{item.location} ({unit_part}，{expire_str})")
 
     return {
         "chat_result": ChatResult(
@@ -635,6 +686,238 @@ def location_query_node(state: SquirrelGraphState) -> SquirrelGraphState:
 def _build_context_item(item: Item) -> dict:
     return {"id": item.id, "title": item.title, "location": item.location,
             "spaceName": item.spaceName, "count": item.count, "unit": item.unit}
+
+
+# ========== 多选支持：解析 + 分摊 ==========
+
+
+def _build_multi_consume_allocation(selected_items: list[dict], total_deduct: int | None) -> dict[str, int]:
+    """Compute per-item deduction, allocating by expiry priority.
+
+    Sorts items by (expire_days ASC -> -count ASC for tie-breaking).
+    If total_deduct is set: spread across items, deducting as much as
+    possible from each before moving to the next (FIFO / 临期优先).
+    If total_deduct is None: each item loses 1 unit.
+    Returns {item_id: deduct_count}.
+    """
+    sorted_items = sorted(
+        selected_items,
+        key=lambda item: (
+            item.get("expire_days") if item.get("expire_days") is not None else 9999,
+            -item.get("count", 0),
+        ),
+    )
+
+    allocation: dict[str, int] = {}
+    remaining = total_deduct
+
+    for item in sorted_items:
+        item_id = item.get("id")
+        count = item.get("count", 0)
+        if not item_id:
+            continue
+
+        if remaining is not None:
+            # Carry-forward: deduct as much as possible from this item
+            deduct = min(remaining, count)
+            remaining -= deduct
+            if deduct > 0:
+                allocation[item_id] = deduct
+        else:
+            # No total specified: 1 per item
+            if count > 0:
+                allocation[item_id] = 1
+
+    return allocation
+
+
+def _build_multi_consume_reply(selected_items: list[dict], allocation: dict[str, int]) -> str:
+    """Build human-readable summary of batch consume operations."""
+    parts = []
+    total_deducted = 0
+    unit_str = "个"
+
+    for item in selected_items:
+        item_id = item.get("id")
+        title = item.get("title", "?")
+        count = item.get("count", 0)
+        unit = item.get("unit", "个")
+        location = item.get("location", "?")
+        space = item.get("spaceName", "")
+        deduct = allocation.get(item_id, 0)
+
+        unit_str = unit
+
+        if deduct > 0:
+            total_deducted += deduct
+            if deduct >= count:
+                parts.append(f"{space}/{location}的「{title}」：消耗{deduct}{unit}，已用完")
+            else:
+                new_count = count - deduct
+                parts.append(f"{space}/{location}的「{title}」：消耗{deduct}{unit}，剩余{new_count}{unit}")
+        else:
+            parts.append(f"{space}/{location}的「{title}」：未操作（剩余{count}{unit}）")
+
+    if total_deducted > 0:
+        parts.append(f"总共消耗{total_deducted}{unit_str}")
+
+    return "\n".join(parts)
+
+
+def _build_multi_remove_reply(selected_items: list[dict]) -> str:
+    """Build summary for batch remove operations."""
+    locations = []
+    for item in selected_items:
+        loc = item.get("location", "?")
+        space = item.get("spaceName", "")
+        title = item.get("title", "?")
+        locations.append(f"{space}/{loc}的「{title}」")
+    return f"已移除 {len(selected_items)} 个位置的物品：{'、'.join(locations)}"
+
+
+def _build_multi_update_reply(selected_items: list[dict], op_type: str, patch: dict) -> str:
+    """Build summary for batch update operations."""
+    titles = [item.get("title", "?") for item in selected_items]
+    if op_type == "update_location":
+        loc = patch.get("location", "")
+        return f"已将 {len(selected_items)} 件物品移动到{loc}：{'、'.join(titles)}"
+    return f"已更新 {len(selected_items)} 件物品：{'、'.join(titles)}"
+
+
+def confirm_multi_selection_node(state: SquirrelGraphState) -> SquirrelGraphState:
+    """Handle multi-index selection input.
+
+    Parses user text (comma/space/range-separated indices), validates against
+    pending_item_selection, and returns confirmedItemIds based on operation type.
+
+    Behaviors by pending_operation type:
+      - consume:  allocate deduction across selected items by expiry priority
+      - remove:   return list of IDs to delete
+      - update_*: return list of IDs + the patch
+    """
+    from app.services.parser import parse_multi_selection
+
+    text = state.get("text", "").strip()
+    selection = state.get("pending_item_selection", [])
+    pending_op = state.get("pending_operation")
+    last_added = state.get("last_added_item")
+
+    parsed = parse_multi_selection(text, len(selection))
+    if not isinstance(parsed, list):
+        return {
+            "chat_result": ChatResult(
+                intent="chat",
+                replyText="输入格式无法识别，请回复数字序号（如 1,3,5），或回复「取消」退出。",
+            ),
+            "interaction_mode": "item_select_confirm",
+            "pending_item_selection": selection,
+            "pending_operation": pending_op,
+            "last_added_item": last_added,
+        }
+
+    # === Validate indices ===
+    valid_indices = [i for i in parsed if 0 <= i < len(selection)]
+    invalid_indices = [i for i in parsed if not (0 <= i < len(selection))]
+
+    if not valid_indices:
+        return {
+            "chat_result": ChatResult(
+                intent="chat",
+                replyText=f"序号超出范围，请输入 1~{len(selection)} 之间的数字，支持多选（如 1,2）。",
+            ),
+            "interaction_mode": "item_select_confirm",
+            "pending_item_selection": selection,
+            "pending_operation": pending_op,
+            "last_added_item": last_added,
+        }
+
+    selected_items = [selection[i] for i in valid_indices]
+    item_ids = [item["id"] for item in selected_items if item.get("id")]
+
+    # Build warning for out-of-range indices
+    warning = ""
+    if invalid_indices:
+        display_invalid = [str(i + 1) for i in invalid_indices]
+        warning = f"（序号 {', '.join(display_invalid)} 超出范围，已忽略）"
+
+    op_type = (pending_op or {}).get("type", "consume")
+
+    # === Batch update ===
+    if op_type.startswith("update_"):
+        patch = (pending_op or {}).get("patch", {})
+        reply_text = _build_multi_update_reply(selected_items, op_type, patch) + warning
+
+        return {
+            "chat_result": ChatResult(
+                intent=op_type,
+                replyText=reply_text,
+                operations=[],
+                confirmedItemIds=item_ids,
+                confirmedPatch=patch,
+            ),
+            "interaction_mode": "normal",
+            "pending_item_selection": None,
+            "pending_operation": None,
+            "last_added_item": last_added,
+        }
+
+    # === Batch remove ===
+    if op_type == "remove":
+        reply_text = _build_multi_remove_reply(selected_items) + warning
+
+        return {
+            "chat_result": ChatResult(
+                intent="remove",
+                replyText=reply_text,
+                needsConfirmation=True,
+                confirmedItemIds=item_ids,
+            ),
+            "interaction_mode": "normal",
+            "pending_item_selection": None,
+            "pending_operation": None,
+            "last_added_item": last_added,
+        }
+
+    # === Batch consume (default) ===
+    total_deduct = None
+    if pending_op:
+        total_deduct = pending_op.get("deductCount")
+
+    allocation = _build_multi_consume_allocation(selected_items, total_deduct)
+
+    if total_deduct is not None:
+        # Check if selected items have enough total quantity
+        total_available = sum(item.get("count", 0) for item in selected_items)
+        if total_deduct > total_available:
+            total_unit = selected_items[0].get("unit", "个") if selected_items else "个"
+            return {
+                "chat_result": ChatResult(
+                    intent="consume",
+                    replyText=f"选中的物品总共只有 {total_available}{total_unit}，需要消耗 {total_deduct}{total_unit}，数量不足。是否全部消耗并删除？如确认请回复「确认」取消请回复「取消」。",
+                    needsConfirmation=True,
+                    # Let the graph handle this with a special re-entry
+                ),
+                "interaction_mode": "item_select_confirm",
+                "pending_item_selection": selection,
+                "pending_operation": {**pending_op, "consume_all_confirmed": True} if pending_op else {"consume_all_confirmed": True},
+                "last_added_item": last_added,
+            }
+
+    reply_text = "已完成消耗：\n" + _build_multi_consume_reply(selected_items, allocation) + warning
+
+    return {
+        "chat_result": ChatResult(
+            intent="consume",
+            replyText=reply_text,
+            needsConfirmation=True,
+            confirmedItemIds=item_ids,
+            confirmedDeductCounts=allocation,
+        ),
+        "interaction_mode": "normal",
+        "pending_item_selection": None,
+        "pending_operation": None,
+        "last_added_item": last_added,
+    }
 
 
 def quantity_query_node(state: SquirrelGraphState) -> SquirrelGraphState:
@@ -828,6 +1111,7 @@ def build_squirrel_graph():
     # === 新增节点 ===
     graph.add_node("confirm_selection", confirm_selection_node)
     graph.add_node("confirm_selection_all", confirm_selection_all_node)
+    graph.add_node("confirm_multi_selection", confirm_multi_selection_node)
     graph.add_node("reset_selection", reset_selection_node)
     graph.add_node("invalid_selection", invalid_selection_node)
 
@@ -855,6 +1139,7 @@ def build_squirrel_graph():
             "classify_intent": "classify_intent",
             "confirm_selection": "confirm_selection",
             "confirm_selection_all": "confirm_selection_all",
+            "confirm_multi_selection": "confirm_multi_selection",
             "reset_selection": "reset_selection",
             "invalid_selection": "invalid_selection",
         },
@@ -883,7 +1168,7 @@ def build_squirrel_graph():
 
     # 所有节点连接到 END
     for node in [
-        "confirm_selection", "confirm_selection_all", "reset_selection", "invalid_selection",
+        "confirm_selection", "confirm_selection_all", "confirm_multi_selection", "reset_selection", "invalid_selection",
         "add", "consume", "remove",
         "update_location", "update_expiry", "update_remaining",
         "expiry_query", "location_query", "quantity_query", "search_query", "idle_query",

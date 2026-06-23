@@ -2,7 +2,7 @@ import json
 import logging
 import re
 from datetime import date, timedelta
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -197,6 +197,87 @@ def extract_remaining_patch(text: str, item: Item | None = None) -> dict[str, in
         remaining_pct = 0 if item.count <= 0 else max(0, round(remaining_count / item.count * 100))
         return {"count": remaining_count, "remainingPct": remaining_pct}
     return None
+
+
+# ---------------------------------------------------------------------------
+# Multi-item selection parsing (pure rule-based, no LLM)
+# ---------------------------------------------------------------------------
+
+
+def parse_multi_selection(text: str, max_index: int) -> list[int] | Literal["all", "cancel"] | None:
+    """Parse user input in item selection mode to determine which items are selected.
+
+    All-rule-based implementation for 100% accuracy. Never calls LLM.
+
+    Args:
+        text: Raw user input.
+        max_index: Number of available candidates (1-based max).
+
+    Returns:
+        list[int]: 0-based valid indices (caller must validate range).
+        "all":     User wants all items (全部/所有/全选/都要).
+        "cancel":  User wants to cancel (取消/退出/不选了).
+        None:      Unparseable input.
+
+    Supported formats:
+        - Single: "3" -> [2]
+        - Comma/space: "1,3,5" / "1 3 5" -> [0,2,4]
+        - Chinese comma: "1、3、5" -> [0,2,4]
+        - Range: "1-3" / "1~3" / "1到3" -> [0,1,2]
+        - Mixed: "1-3,5,7-9" -> [0,1,2,4,6,7,8]
+        - Chinese: "1和3" / "第1个和第3个" -> [0,2]
+        - Chinese numerals: "一,三" -> [0,2]
+    """
+    t = text.strip()
+    if not t:
+        return None
+
+    # === Cancel keywords ===
+    if t in ("取消", "退出", "不选了"):
+        return "cancel"
+
+    # === All-keywords ===
+    if t in ("全部", "所有", "全选", "都要"):
+        return "all"
+
+    # === Normalize Chinese punctuation ===
+    t = t.replace("、", ",")
+    t = t.replace("和", ",")
+    t = t.replace("~", "-")
+    # 到 -> range separator (but only between digits: "1到3")
+    t = re.sub(r"(\d)\s*到\s*(\d)", r"\1-\2", t)
+
+    # Strip ordinal markers: 第1个, 第3个 -> 1, 3
+    t = re.sub(r"第(\d+)个", r"\1", t)
+
+    # Replace Chinese numerals (一~九) with Arabic digits
+    for cn, ar in CHINESE_NUMERALS.items():
+        t = t.replace(cn, str(ar))
+    t = re.sub(r"\s+", "", t)  # remove all whitespace after numeral replacement
+
+    # Split by comma
+    segments = [s.strip() for s in t.split(",") if s.strip()]
+    indices: set[int] = set()
+
+    for seg in segments:
+        # Range: X-Y
+        range_match = re.match(r"^(\d+)\s*-\s*(\d+)$", seg)
+        if range_match:
+            start, end = int(range_match.group(1)), int(range_match.group(2))
+            for i in range(start, end + 1):
+                indices.add(i - 1)  # convert to 0-based
+            continue
+        # Single number
+        num_match = re.match(r"^(\d+)$", seg)
+        if num_match:
+            indices.add(int(num_match.group(1)) - 1)  # 0-based
+            continue
+        # Unparseable segment -> skip
+
+    if not indices:
+        return None
+
+    return sorted(indices)
 
 
 def extract_search_keyword(text: str) -> str:

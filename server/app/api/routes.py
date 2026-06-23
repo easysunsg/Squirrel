@@ -9,6 +9,7 @@ from app.db.sqlite import (
     create_pending_confirmation,
     create_pending_consume,
     delete_item,
+    delete_items_batch,
     delete_pending_confirmation,
     get_conversation_state,
     get_pending_confirmation,
@@ -389,8 +390,87 @@ def chat(request: ChatRequest):
         new_context_item = graph_result.get("current_context_item") if "current_context_item" in graph_result else current_context_item
         save_conversation_state(conn, new_mode, new_selection, new_operation, new_last_added, new_context_item)
 
-        # === 如果 graph 确认了物品选择，直接执行操作 ===
-        if chat_result.confirmedItemId is not None:
+        # === 多选批量操作（优先于单选） ===
+        if chat_result.confirmedItemIds:
+            item_ids = set(chat_result.confirmedItemIds)
+
+            # 批量属性修改（confirmedPatch）
+            if chat_result.confirmedPatch:
+                patched_titles = []
+                for sel_item in (pending_selection or []):
+                    sel_id = sel_item.get("id")
+                    if sel_id not in item_ids:
+                        continue
+                    target_item = next((it for it in inventory if it.id == sel_id), None)
+                    if not target_item:
+                        current_items = list_items(conn)
+                        target_item = next((it for it in current_items if it.id == sel_id), None)
+                    if target_item:
+                        upsert_item(conn, apply_item_patch(target_item, chat_result.confirmedPatch))
+                        patched_titles.append(target_item.title)
+                reply_text = f"已更新 {len(patched_titles)} 件物品：{'、'.join(patched_titles)}。"
+
+            # 批量消耗/删除
+            elif chat_result.confirmedDeductCounts:
+                deduct_map = chat_result.confirmedDeductCounts
+                parts = []
+                for sel_item in (pending_selection or []):
+                    sel_id = sel_item.get("id")
+                    if sel_id not in item_ids:
+                        continue
+                    target_item = next((it for it in inventory if it.id == sel_id), None)
+                    if not target_item:
+                        current_items = list_items(conn)
+                        target_item = next((it for it in current_items if it.id == sel_id), None)
+                    if not target_item:
+                        continue
+                    deduct_count = deduct_map.get(sel_id, 0)
+                    if deduct_count > 0:
+                        if deduct_count >= target_item.count:
+                            delete_item(conn, sel_id)
+                            parts.append(f"「{target_item.title}」已消耗完")
+                        else:
+                            new_count = target_item.count - deduct_count
+                            new_pct = max(0, round(new_count / max(target_item.count, 1) * 100))
+                            upsert_item(conn, apply_item_patch(target_item, {"count": new_count, "remainingPct": new_pct}))
+                            parts.append(f"「{target_item.title}」消耗{deduct_count}{target_item.unit}，剩余{new_count}{target_item.unit}")
+                reply_text = "已批量消耗：\n" + "；".join(parts) if parts else "未执行任何操作。"
+
+            else:
+                # 无 deductCount → 批量删除（remove 路径）
+                deleted_titles = []
+                for sel_item in (pending_selection or []):
+                    sel_id = sel_item.get("id")
+                    if sel_id in item_ids and sel_id:
+                        delete_item(conn, sel_id)
+                        deleted_titles.append(sel_item.get("title", ""))
+                reply_text = f"已移除 {len(deleted_titles)} 件物品。"
+
+            chat_result.replyText = reply_text
+
+            # 构造确认消息（同单选的模式）
+            from uuid import uuid4
+            confirm_message = Message(
+                id=f"msg-batch-{uuid4().hex[:8]}",
+                sender="assistant",
+                text=reply_text,
+                timestamp="刚刚",
+            )
+            history.append(confirm_message)
+            replace_messages(conn, history)
+            state = get_state(conn)
+
+            sync_inventory_markdown(state)
+            vector_store.upsert_items(state.items)
+
+            return {
+                "reply": reply_text,
+                "messages": history,
+                "items": state.items,
+            }
+
+        # === 如果 graph 确认了物品选择（单选），直接执行操作 ===
+        elif chat_result.confirmedItemId is not None:
             item_id = chat_result.confirmedItemId
 
             # 情况 1：属性修改（confirmedPatch）
