@@ -87,6 +87,9 @@ def route_mode(state: SquirrelGraphState) -> str:
         if isinstance(parsed, list) and len(parsed) == 0:
             # 空列表（理论上不会发生，过滤用）
             return "invalid_selection"
+        if parsed is None:
+            # 完全无法识别的输入 → 保持选择模式并提示
+            return "invalid_selection"
     return "classify_intent"
 
 
@@ -280,6 +283,45 @@ def _match_items_3tier(inventory: list[Item], target: str | None) -> list[Item]:
     return [item for item in inventory if target in item.location or target in item.spaceName]
 
 
+# ========== 共享的多物品候选工具函数 ==========
+
+
+def _build_candidate_entries(candidates: list[Item]) -> list[dict]:
+    """Build pending_item_selection entries from candidate Item list."""
+    entries = []
+    for item in candidates:
+        entries.append({
+            "id": item.id, "title": item.title, "spaceName": item.spaceName,
+            "location": item.location, "count": item.count, "unit": item.unit,
+            "remainingPct": item.remainingPct, "consumeAll": False,
+            "expire_date": item.expireDate or "",
+            "expire_days": _calc_expire_days(item),
+        })
+    return entries
+
+
+def _build_candidate_lines(candidates: list[Item], target: str | None = None) -> list[str]:
+    """Build standardized candidate display lines with expiry info.
+
+    Each line shows: index, name, location, quantity, expiry info.
+    Follows requirement format exactly.
+    """
+    noun = target or "物品"
+    lines = [f"找到 {len(candidates)} 个匹配的「{noun}」，请回复序号选择（支持多选，如「1,2」「全部」）："]
+    for i, item in enumerate(candidates, 1):
+        unit_part = f"{item.count}{item.unit}" if item.count else ""
+        days = _calc_expire_days(item)
+        if days is not None:
+            expire_str = f"{item.expireDate}到期（剩余{days}天"
+            if days <= 3:
+                expire_str += " ⚠️即将过期"
+            expire_str += "）"
+        else:
+            expire_str = "无过期信息"
+        lines.append(f"{i}. {item.title} — {item.spaceName}/{item.location} ({unit_part}，{expire_str})")
+    return lines
+
+
 def consume_node(state: SquirrelGraphState) -> SquirrelGraphState:
     """消耗节点——匹配物品后设置 pending_item_selection 和 interaction_mode。
 
@@ -370,32 +412,16 @@ def consume_node(state: SquirrelGraphState) -> SquirrelGraphState:
     # 按临期升序 → 数量降序排序
     candidates.sort(key=lambda it: (_calc_expire_days(it) if _calc_expire_days(it) is not None else 9999, -it.count))
 
-    pending_selection = []
     total_deduct = None
     if operations and operations[0].patch:
         total_deduct = operations[0].patch.get("deductCount")
-    for item in candidates:
-        deduct_count = _calc_deduct(item)
-        pending_selection.append({
-            "id": item.id, "title": item.title, "spaceName": item.spaceName,
-            "location": item.location, "count": item.count, "unit": item.unit,
-            "remainingPct": item.remainingPct, "consumeAll": consume_all, "deductCount": deduct_count,
-            "expire_date": item.expireDate or "",
-            "expire_days": _calc_expire_days(item),
-        })
+    pending_selection = _build_candidate_entries(candidates)
+    # 补充消耗逻辑特有的字段（deductCount）
+    for i, item in enumerate(candidates):
+        pending_selection[i]["deductCount"] = _calc_deduct(item)
+        pending_selection[i]["consumeAll"] = consume_all
 
-    lines = [f"找到 {len(candidates)} 个匹配的「{target}」，请回复序号选择（支持多选，如「1,2」「全部」）："]
-    for i, item in enumerate(candidates, 1):
-        unit_part = f"{item.count}{item.unit}" if item.count else ""
-        days = _calc_expire_days(item)
-        if days is not None:
-            expire_str = f"{item.expireDate}到期（剩余{days}天"
-            if days <= 3:
-                expire_str += " ⚠️即将过期"
-            expire_str += "）"
-        else:
-            expire_str = "无过期信息"
-        lines.append(f"{i}. {item.title} — {item.spaceName}/{item.location} ({unit_part}，{expire_str})")
+    lines = _build_candidate_lines(candidates, target)
     if consume_all:
         lines.append("回复「全部」将清除所有匹配项")
 
@@ -422,7 +448,52 @@ def consume_node(state: SquirrelGraphState) -> SquirrelGraphState:
 
 
 def remove_node(state: SquirrelGraphState) -> SquirrelGraphState:
-    return {"chat_result": state["chat_result"]}
+    """移除节点——支持单匹配直接执行和多匹配进入选择模式。"""
+    chat_result = state["chat_result"]
+    operations = chat_result.operations
+    inventory = state.get("inventory", [])
+    if not operations:
+        return {"chat_result": ChatResult(intent="remove", replyText="我没识别到要移除的物品。")}
+
+    target = operations[0].target
+    candidates = _match_items_3tier(inventory, target)
+
+    if not candidates:
+        return {
+            "chat_result": ChatResult(
+                intent="remove",
+                replyText=f"没有找到「{target}」相关的物品。",
+            )
+        }
+
+    # 单候选：直接执行
+    if len(candidates) == 1:
+        item = candidates[0]
+        return {
+            "chat_result": ChatResult(
+                intent="remove",
+                replyText=f"已移除「{item.title}」（{item.spaceName}/{item.location}）。",
+                confirmedItemId=item.id,
+                operations=[],
+            ),
+        }
+
+    # 多候选：进入选择模式
+    candidates = candidates[:6]
+    pending_selection = _build_candidate_entries(candidates)
+    lines = _build_candidate_lines(candidates, target)
+
+    return {
+        "chat_result": ChatResult(
+            intent="remove",
+            replyText="\n".join(lines),
+            needsConfirmation=True,
+            itemSuggestion={"matches": [item.model_dump() for item in candidates]},
+        ),
+        "interaction_mode": "item_select_confirm",
+        "pending_item_selection": pending_selection,
+        "pending_operation": {"type": "remove", "target": target},
+    }
 
 
 # ========== 序号选择相关节点 ==========
@@ -597,33 +668,8 @@ def update_location_node(state: SquirrelGraphState) -> SquirrelGraphState:
 
     # 多候选：进入选择流程
     candidates = candidates[:6]
-    pending_selection = []
-    for item in candidates:
-        pending_selection.append({
-            "id": item.id,
-            "title": item.title,
-            "spaceName": item.spaceName,
-            "location": item.location,
-            "count": item.count,
-            "unit": item.unit,
-            "remainingPct": item.remainingPct,
-            "consumeAll": False,
-            "expire_date": item.expireDate or "",
-            "expire_days": _calc_expire_days(item),
-        })
-
-    lines = [f"找到 {len(candidates)} 个匹配物品，请回复序号选择要调整的物品（支持多选，如「1,2」）："]
-    for i, item in enumerate(candidates, 1):
-        unit_part = f"{item.count}{item.unit}" if item.count else ""
-        days = _calc_expire_days(item)
-        if days is not None:
-            expire_str = f"{item.expireDate}到期（剩余{days}天"
-            if days <= 3:
-                expire_str += " ⚠️即将过期"
-            expire_str += "）"
-        else:
-            expire_str = "无过期信息"
-        lines.append(f"{i}. {item.title} — {item.spaceName}/{item.location} ({unit_part}，{expire_str})")
+    pending_selection = _build_candidate_entries(candidates)
+    lines = _build_candidate_lines(candidates, target)
 
     return {
         "chat_result": ChatResult(
@@ -640,11 +686,115 @@ def update_location_node(state: SquirrelGraphState) -> SquirrelGraphState:
 
 
 def update_expiry_node(state: SquirrelGraphState) -> SquirrelGraphState:
-    return {"chat_result": state["chat_result"]}
+    """保质期更新节点——支持单匹配直接执行和多匹配进入选择模式。"""
+    chat_result = state["chat_result"]
+    operations = chat_result.operations
+    inventory = state.get("inventory", [])
+    if not operations:
+        return {"chat_result": chat_result}
+
+    op = operations[0]
+    target = op.target
+    patch = op.patch or {}
+    if not patch.get("expireDate"):
+        return {"chat_result": ChatResult(
+            intent="update_expiry",
+            replyText="请问你要把保质期改到什么时间？",
+        )}
+
+    candidates = _match_items_3tier(inventory, target)
+
+    if not candidates:
+        return {"chat_result": ChatResult(
+            intent="update_expiry",
+            replyText=f"没有找到「{target}」相关的物品。",
+        )}
+
+    # 单候选：直接执行
+    if len(candidates) == 1:
+        item = candidates[0]
+        return {
+            "chat_result": ChatResult(
+                intent="update_expiry",
+                replyText=f"已更新「{item.title}」的保质期。",
+                operations=[],
+                confirmedItemId=item.id,
+                confirmedPatch=patch,
+            ),
+        }
+
+    # 多候选：进入选择模式
+    candidates = candidates[:6]
+    pending_selection = _build_candidate_entries(candidates)
+    lines = _build_candidate_lines(candidates, target)
+
+    return {
+        "chat_result": ChatResult(
+            intent="update_expiry",
+            replyText="\n".join(lines),
+            needsConfirmation=True,
+            itemSuggestion={"matches": [item.model_dump() for item in candidates]},
+        ),
+        "interaction_mode": "item_select_confirm",
+        "pending_item_selection": pending_selection,
+        "pending_operation": {"type": "update_expiry", "patch": patch, "target": target},
+    }
 
 
 def update_remaining_node(state: SquirrelGraphState) -> SquirrelGraphState:
-    return {"chat_result": state["chat_result"]}
+    """剩余百分比更新节点——支持单匹配直接执行和多匹配进入选择模式。"""
+    chat_result = state["chat_result"]
+    operations = chat_result.operations
+    inventory = state.get("inventory", [])
+    if not operations:
+        return {"chat_result": chat_result}
+
+    op = operations[0]
+    target = op.target
+    patch = op.patch or {}
+    if not patch:
+        return {"chat_result": ChatResult(
+            intent="update_remaining",
+            replyText="请问你要把剩余比例改成多少？",
+        )}
+
+    candidates = _match_items_3tier(inventory, target)
+
+    if not candidates:
+        return {"chat_result": ChatResult(
+            intent="update_remaining",
+            replyText=f"没有找到「{target}」相关的物品。",
+        )}
+
+    # 单候选：直接执行
+    if len(candidates) == 1:
+        item = candidates[0]
+        return {
+            "chat_result": ChatResult(
+                intent="update_remaining",
+                replyText=f"已更新「{item.title}」的剩余比例。",
+                operations=[],
+                confirmedItemId=item.id,
+                confirmedPatch=patch,
+            ),
+        }
+
+    # 多候选：进入选择模式
+    candidates = candidates[:6]
+    pending_selection = _build_candidate_entries(candidates)
+    lines = _build_candidate_lines(candidates, target)
+
+    return {
+        "chat_result": ChatResult(
+            intent="update_remaining",
+            replyText="\n".join(lines),
+            needsConfirmation=True,
+            itemSuggestion={"matches": [item.model_dump() for item in candidates]},
+        ),
+        "interaction_mode": "item_select_confirm",
+        "pending_item_selection": pending_selection,
+        "pending_operation": {"type": "update_remaining", "patch": patch, "target": target},
+    }
 
 
 def expiry_query_node(state: SquirrelGraphState) -> SquirrelGraphState:
@@ -686,6 +836,53 @@ def location_query_node(state: SquirrelGraphState) -> SquirrelGraphState:
 def _build_context_item(item: Item) -> dict:
     return {"id": item.id, "title": item.title, "location": item.location,
             "spaceName": item.spaceName, "count": item.count, "unit": item.unit}
+
+
+# ========== 统一后置处理节点 ==========
+
+
+def post_process(state: SquirrelGraphState) -> SquirrelGraphState:
+    """统一后置处理节点——所有操作/选择节点完成后必经。
+
+    职责（收敛统一，禁止各业务节点单独实现）：
+    1. 上下文更新：操作执行后更新 current_context_item
+    2. 日志记录：记录操作类型、执行结果
+    3. 异常兜底：状态确保一致性（不覆盖节点已经设好的 mode）
+    """
+    chat_result = state.get("chat_result", ChatResult())
+    current_mode = state.get("interaction_mode", "normal")
+
+    # === 日志记录 ===
+    op_type = chat_result.intent or "unknown"
+    has_confirmed = bool(chat_result.confirmedItemId or chat_result.confirmedItemIds)
+    logger.info(
+        "post_process: intent=%s mode=%s confirmed=%s reply_text=%s",
+        op_type, current_mode, has_confirmed,
+        (chat_result.replyText or "")[:60],
+    )
+
+    # === 上下文更新：如果 confirmedItemId 已知但未设置 current_context_item ===
+    ctx_item = state.get("current_context_item")
+    if chat_result.confirmedItemId and not ctx_item:
+        selection = state.get("pending_item_selection", []) or []
+        for sel in selection:
+            if sel.get("id") == chat_result.confirmedItemId:
+                ctx_item = {
+                    "id": sel["id"], "title": sel.get("title", ""),
+                    "location": sel.get("location", ""),
+                    "spaceName": sel.get("spaceName", ""),
+                    "count": sel.get("count", 0), "unit": sel.get("unit", "个"),
+                }
+                break
+
+    return {
+        "current_context_item": ctx_item,
+        # 保留节点已经设好的所有状态字段
+        "interaction_mode": current_mode,
+        "pending_item_selection": state.get("pending_item_selection"),
+        "pending_operation": state.get("pending_operation"),
+        "last_added_item": state.get("last_added_item"),
+    }
 
 
 # ========== 多选支持：解析 + 分摊 ==========
@@ -1131,6 +1328,9 @@ def build_squirrel_graph():
     graph.add_node("recipe", recipe_node)
     graph.add_node("chat", chat_node)
 
+    # === 统一后置处理节点 ===
+    graph.add_node("post_process", post_process)
+
     # === 优先路由：START → route_mode（比 classify_intent 优先级更高） ===
     graph.add_conditional_edges(
         START,
@@ -1166,11 +1366,19 @@ def build_squirrel_graph():
         },
     )
 
-    # 所有节点连接到 END
+    # === 操作节点 + 选择节点 → post_process → END ===
+    # 所有可能修改状态/需要清理的节点先过 post_process
     for node in [
-        "confirm_selection", "confirm_selection_all", "confirm_multi_selection", "reset_selection", "invalid_selection",
+        "confirm_selection", "confirm_selection_all", "confirm_multi_selection",
+        "reset_selection", "invalid_selection",
         "add", "consume", "remove",
         "update_location", "update_expiry", "update_remaining",
+    ]:
+        graph.add_edge(node, "post_process")
+    graph.add_edge("post_process", END)
+
+    # === 查询节点 + 闲聊 + 菜谱：不涉及状态修改，直接到 END ===
+    for node in [
         "expiry_query", "location_query", "quantity_query", "search_query", "idle_query",
         "recipe", "chat",
     ]:
