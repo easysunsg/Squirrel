@@ -6,7 +6,11 @@ def test_graph_routes_add_to_operations():
     result = run_squirrel_graph("3袋螺蛳粉，放客厅箱子里")
 
     assert result["chat_result"].intent == "add"
-    assert result["chat_result"].operations[0].item.title == "螺蛳粉"
+    # After Phase 2 refactoring, operations are moved to db_operations.pending_add
+    db_ops = result.get("db_operations", {})
+    pending = db_ops.get("pending_add", [])
+    assert len(pending) > 0, f"Expected pending_add items, got db_ops={db_ops}"
+    assert pending[0].title == "螺蛳粉"
 
 
 def test_graph_routes_expiry_query():

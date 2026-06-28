@@ -7,7 +7,7 @@ from datetime import date, timedelta
 from uuid import uuid4
 
 from app.core.config import settings
-from app.models.schemas import AppState, Item, Message, Space, SystemPreferences
+from app.models.schemas import AppState, Item, ItemInstance, Message, SKU, Space, SpatialNode, SystemPreferences
 
 
 def today_iso() -> str:
@@ -177,6 +177,46 @@ def init_db() -> None:
                 last_added_item TEXT,
                 current_context_item TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS skus (
+                sku_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'other',
+                unit TEXT NOT NULL DEFAULT '个',
+                remind_days_before INTEGER NOT NULL DEFAULT 5,
+                tags TEXT,
+                icon TEXT NOT NULL DEFAULT 'package_2',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS item_instances (
+                instance_id TEXT PRIMARY KEY,
+                sku_id TEXT NOT NULL REFERENCES skus(sku_id),
+                space_id TEXT NOT NULL DEFAULT 'kitchen',
+                location TEXT NOT NULL DEFAULT '默认层架',
+                quantity INTEGER NOT NULL DEFAULT 1,
+                remaining_pct INTEGER NOT NULL DEFAULT 100,
+                buy_date TEXT,
+                expire_date TEXT,
+                is_opened INTEGER NOT NULL DEFAULT 0,
+                opened_date TEXT,
+                pao_days INTEGER NOT NULL DEFAULT 0,
+                final_expiry_date TEXT,
+                belongs_to_slot_id TEXT REFERENCES spatial_nodes(node_id),
+                last_modified_by TEXT NOT NULL DEFAULT 'system',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS spatial_nodes (
+                node_id TEXT PRIMARY KEY,
+                node_type TEXT NOT NULL CHECK(node_type IN ('Zone','Fixture','Container','Slot')),
+                parent_id TEXT REFERENCES spatial_nodes(node_id),
+                name TEXT NOT NULL,
+                aliases TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
             """
         )
 
@@ -205,7 +245,38 @@ def init_db() -> None:
         if "last_added_item" not in cs_columns:
             conn.execute("ALTER TABLE conversation_state ADD COLUMN last_added_item TEXT")
 
-        if conn.execute("SELECT COUNT(*) FROM spaces").fetchone()[0] == 0:
+        # === 新表迁移：为旧 items 表中的数据填充 skus + item_instances ===
+        sku_table_exists = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='skus'").fetchone()
+        if sku_table_exists and conn.execute("SELECT COUNT(*) FROM item_instances").fetchone()[0] == 0:
+            old_items = conn.execute("SELECT * FROM items").fetchall()
+            for row in old_items:
+                title = row["title"]
+                # Create or find SKU
+                existing_sku = conn.execute("SELECT sku_id FROM skus WHERE title = ?", (title,)).fetchone()
+                if existing_sku:
+                    sku_id = existing_sku["sku_id"]
+                else:
+                    sku_id = f"sku-{uuid4().hex[:12]}"
+                    conn.execute(
+                        """INSERT INTO skus(sku_id, title, category, unit, remind_days_before, tags, icon)
+                           VALUES(?, ?, ?, ?, ?, ?, ?)""",
+                        (sku_id, title, row["category"], row["unit"], row["remind_days_before"],
+                         row["tags"], row["icon"]),
+                    )
+                # Create instance
+                instance_id = row["id"]  # reuse old item ID as instance_id
+                conn.execute(
+                    """INSERT INTO item_instances(
+                        instance_id, sku_id, space_id, location, quantity, remaining_pct,
+                        buy_date, expire_date, last_modified_by
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (instance_id, sku_id, row["space_id"], row["location"], row["count"],
+                     row["remaining_pct"], row["buy_date"], row["expire_date"], "system"),
+                )
+
+        # 种子空间节点
+        if sku_table_exists and conn.execute("SELECT COUNT(*) FROM spatial_nodes").fetchone()[0] == 0:
+            seed_spatial_nodes(conn)
             replace_spaces(conn, DEFAULT_SPACES)
         if conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0:
             for item in DEFAULT_ITEMS:
@@ -261,7 +332,11 @@ def list_items(conn: sqlite3.Connection) -> list[Item]:
 
 
 def upsert_item(conn: sqlite3.Connection, item: Item) -> Item:
+    """Insert or update an item. Writes to both old `items` table (backward compat)
+    and new `skus` + `item_instances` tables."""
     item = normalize_item(item)
+
+    # === Write to old items table (backward compat) ===
     conn.execute(
         """
         INSERT INTO items(
@@ -306,11 +381,53 @@ def upsert_item(conn: sqlite3.Connection, item: Item) -> Item:
             item.icon,
         ),
     )
+
+    # === Write to new skus + item_instances tables ===
+    get_or_create_sku(conn, item.title, category=item.category, unit=item.unit,
+                      remind_days_before=item.remindDaysBefore, tags=item.tags,
+                      icon=item.icon)
+    sku_row = conn.execute("SELECT sku_id FROM skus WHERE title = ?", (item.title,)).fetchone()
+    sku_id = sku_row["sku_id"] if sku_row else f"sku-{uuid4().hex[:12]}"
+
+    instance_id = item.id or item.instanceId or f"inst-{uuid4().hex[:12]}"
+    conn.execute(
+        """INSERT INTO item_instances(
+            instance_id, sku_id, space_id, location, quantity, remaining_pct,
+            buy_date, expire_date, is_opened, opened_date, pao_days,
+            final_expiry_date, belongs_to_slot_id, last_modified_by
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(instance_id) DO UPDATE SET
+            sku_id=excluded.sku_id,
+            space_id=excluded.space_id,
+            location=excluded.location,
+            quantity=excluded.quantity,
+            remaining_pct=excluded.remaining_pct,
+            buy_date=excluded.buy_date,
+            expire_date=excluded.expire_date,
+            is_opened=excluded.is_opened,
+            opened_date=excluded.opened_date,
+            pao_days=excluded.pao_days,
+            final_expiry_date=excluded.final_expiry_date,
+            belongs_to_slot_id=excluded.belongs_to_slot_id,
+            last_modified_by=excluded.last_modified_by,
+            updated_at=CURRENT_TIMESTAMP""",
+        (
+            instance_id, sku_id,
+            item.spaceId, item.location, item.count,
+            item.remainingPct, item.buyDate, item.expireDate,
+            1 if item.isOpened else 0, item.openedDate, item.paoDays,
+            item.finalExpiryDate or item.expireDate, item.belongsToSlotId,
+            item.last_modified_by if hasattr(item, 'last_modified_by') else "system",
+        ),
+    )
+
     return item
 
 
 def delete_item(conn: sqlite3.Connection, item_id: str) -> bool:
+    """Delete an item by ID from both old and new tables."""
     cur = conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+    conn.execute("DELETE FROM item_instances WHERE instance_id = ?", (item_id,))
     return cur.rowcount > 0
 
 
@@ -319,8 +436,390 @@ def delete_items_batch(conn: sqlite3.Connection, item_ids: list[str]) -> int:
     total = 0
     for item_id in item_ids:
         cur = conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+        conn.execute("DELETE FROM item_instances WHERE instance_id = ?", (item_id,))
         total += cur.rowcount
     return total
+
+
+# ====================================================================
+# SKU data access
+# ====================================================================
+
+
+def upsert_sku(conn: sqlite3.Connection, sku: SKU) -> SKU:
+    """Insert or update a SKU record."""
+    if not sku.sku_id:
+        sku.sku_id = f"sku-{uuid4().hex[:12]}"
+    conn.execute(
+        """INSERT INTO skus(sku_id, title, category, unit, remind_days_before, tags, icon)
+           VALUES(?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(sku_id) DO UPDATE SET
+               title=excluded.title,
+               category=excluded.category,
+               unit=excluded.unit,
+               remind_days_before=excluded.remind_days_before,
+               tags=excluded.tags,
+               icon=excluded.icon,
+               updated_at=CURRENT_TIMESTAMP""",
+        (sku.sku_id, sku.title, sku.category, sku.unit, sku.remind_days_before,
+         json.dumps(sku.tags, ensure_ascii=False) if sku.tags else None, sku.icon),
+    )
+    return sku
+
+
+def get_or_create_sku(conn: sqlite3.Connection, title: str, **defaults) -> SKU:
+    """Find a SKU by title, or create one with optional defaults."""
+    row = conn.execute("SELECT * FROM skus WHERE title = ?", (title,)).fetchone()
+    if row:
+        return _row_to_sku(row)
+    sku = SKU(title=title, **defaults)
+    return upsert_sku(conn, sku)
+
+
+def _row_to_sku(row: sqlite3.Row) -> SKU:
+    return SKU(
+        sku_id=row["sku_id"],
+        title=row["title"],
+        category=row["category"],
+        unit=row["unit"],
+        remind_days_before=row["remind_days_before"],
+        tags=json.loads(row["tags"]) if row["tags"] else [],
+        icon=row["icon"],
+        created_at=row["created_at"] or "",
+        updated_at=row["updated_at"] or "",
+    )
+
+
+def list_skus(conn: sqlite3.Connection) -> list[SKU]:
+    rows = conn.execute("SELECT * FROM skus ORDER BY title").fetchall()
+    return [_row_to_sku(row) for row in rows]
+
+
+# ====================================================================
+# ItemInstance data access
+# ====================================================================
+
+
+def upsert_instance(conn: sqlite3.Connection, instance: ItemInstance) -> ItemInstance:
+    """Insert or update an item instance."""
+    if not instance.instance_id:
+        instance.instance_id = f"inst-{uuid4().hex[:12]}"
+    if instance.expire_date or instance.opened_date:
+        instance.final_expiry_date = compute_final_expiry(instance)
+    conn.execute(
+        """INSERT INTO item_instances(
+            instance_id, sku_id, space_id, location, quantity, remaining_pct,
+            buy_date, expire_date, is_opened, opened_date, pao_days,
+            final_expiry_date, belongs_to_slot_id, last_modified_by
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(instance_id) DO UPDATE SET
+            sku_id=excluded.sku_id,
+            space_id=excluded.space_id,
+            location=excluded.location,
+            quantity=excluded.quantity,
+            remaining_pct=excluded.remaining_pct,
+            buy_date=excluded.buy_date,
+            expire_date=excluded.expire_date,
+            is_opened=excluded.is_opened,
+            opened_date=excluded.opened_date,
+            pao_days=excluded.pao_days,
+            final_expiry_date=excluded.final_expiry_date,
+            belongs_to_slot_id=excluded.belongs_to_slot_id,
+            last_modified_by=excluded.last_modified_by,
+            updated_at=CURRENT_TIMESTAMP""",
+        (
+            instance.instance_id, instance.sku_id,
+            instance.space_id, instance.location, instance.quantity,
+            instance.remaining_pct, instance.buy_date, instance.expire_date,
+            1 if instance.is_opened else 0, instance.opened_date, instance.pao_days,
+            instance.final_expiry_date, instance.belongs_to_slot_id,
+            instance.last_modified_by,
+        ),
+    )
+    return instance
+
+
+def _row_to_instance(row: sqlite3.Row) -> ItemInstance:
+    return ItemInstance(
+        instance_id=row["instance_id"],
+        sku_id=row["sku_id"],
+        space_id=row["space_id"],
+        location=row["location"],
+        quantity=row["quantity"],
+        remaining_pct=row["remaining_pct"],
+        buy_date=row["buy_date"],
+        expire_date=row["expire_date"],
+        is_opened=bool(row["is_opened"]),
+        opened_date=row["opened_date"],
+        pao_days=row["pao_days"],
+        final_expiry_date=row["final_expiry_date"],
+        belongs_to_slot_id=row["belongs_to_slot_id"],
+        last_modified_by=row["last_modified_by"],
+        created_at=row["created_at"] or "",
+        updated_at=row["updated_at"] or "",
+    )
+
+
+def list_instances(conn: sqlite3.Connection) -> list[ItemInstance]:
+    rows = conn.execute("SELECT * FROM item_instances ORDER BY created_at DESC, instance_id DESC").fetchall()
+    return [_row_to_instance(row) for row in rows]
+
+
+def find_instances_by_sku(conn: sqlite3.Connection, sku_id: str) -> list[ItemInstance]:
+    rows = conn.execute(
+        "SELECT * FROM item_instances WHERE sku_id = ? ORDER BY final_expiry_date ASC, buy_date ASC",
+        (sku_id,),
+    ).fetchall()
+    return [_row_to_instance(row) for row in rows]
+
+
+def find_instances_by_slot(conn: sqlite3.Connection, slot_id: str) -> list[ItemInstance]:
+    rows = conn.execute(
+        "SELECT * FROM item_instances WHERE belongs_to_slot_id = ? ORDER BY final_expiry_date ASC",
+        (slot_id,),
+    ).fetchall()
+    return [_row_to_instance(row) for row in rows]
+
+
+def delete_instance(conn: sqlite3.Connection, instance_id: str) -> bool:
+    cur = conn.execute("DELETE FROM item_instances WHERE instance_id = ?", (instance_id,))
+    return cur.rowcount > 0
+
+
+def compute_final_expiry(instance: ItemInstance) -> str | None:
+    """Compute final_expiry_date = min(expire_date, opened_date + pao_days)."""
+    from datetime import datetime
+    candidates: list[date] = []
+    if instance.expire_date:
+        try:
+            candidates.append(datetime.strptime(instance.expire_date, "%Y-%m-%d").date())
+        except (ValueError, TypeError):
+            pass
+    if instance.opened_date and instance.pao_days > 0:
+        try:
+            opened = datetime.strptime(instance.opened_date, "%Y-%m-%d").date()
+            candidates.append(opened + timedelta(days=instance.pao_days))
+        except (ValueError, TypeError):
+            pass
+    if not candidates:
+        return instance.expire_date
+    return min(candidates).isoformat()
+
+
+# ====================================================================
+# Joined view: SKU + Instance → flattened Item
+# ====================================================================
+
+
+def join_all_items(conn: sqlite3.Connection) -> list[Item]:
+    """JOIN skus + item_instances → flat Item list (replaces list_items as primary read path)."""
+    rows = conn.execute(
+        """SELECT sku.sku_id, sku.title, sku.category, sku.unit,
+                  sku.remind_days_before, sku.tags as sku_tags, sku.icon,
+                  inst.instance_id, inst.space_id, inst.location,
+                  inst.quantity, inst.remaining_pct, inst.buy_date,
+                  inst.expire_date, inst.is_opened, inst.opened_date,
+                  inst.pao_days, inst.final_expiry_date,
+                  inst.belongs_to_slot_id, inst.last_modified_by
+           FROM item_instances inst
+           JOIN skus sku ON inst.sku_id = sku.sku_id
+           ORDER BY inst.created_at DESC, inst.instance_id DESC""",
+    ).fetchall()
+    return [_join_row_to_item(row) for row in rows]
+
+
+def _join_row_to_item(row: sqlite3.Row) -> Item:
+    """Convert a joined row into a flat Item model."""
+    from app.services.parser import guess_category, guess_icon
+    quantity = row["quantity"]
+    remaining_pct = row["remaining_pct"]
+    tag = "告急" if remaining_pct < 20 else "较低" if remaining_pct < 50 else "充足"
+    title = row["title"]
+    # space_id → space_name mapping
+    space_id = row["space_id"]
+    space_name = _space_id_to_name(space_id)
+
+    return Item(
+        id=row["instance_id"],
+        title=title,
+        category=row["category"] or guess_category(title),
+        spaceId=space_id,
+        spaceName=space_name,
+        location=row["location"],
+        remainingPct=remaining_pct,
+        buyDate=row["buy_date"],
+        expireDate=row["expire_date"],
+        tag=tag,
+        count=quantity,
+        unit=row["unit"],
+        remindDaysBefore=row["remind_days_before"],
+        tags=json.loads(row["sku_tags"]) if row["sku_tags"] else [],
+        icon=row["icon"] or guess_icon(title, space_name),
+        isOpened=bool(row["is_opened"]),
+        openedDate=row["opened_date"],
+        paoDays=row["pao_days"],
+        finalExpiryDate=row["final_expiry_date"],
+        belongsToSlotId=row["belongs_to_slot_id"],
+        skuId=row["sku_id"],
+        instanceId=row["instance_id"],
+    )
+
+
+_SPACE_NAME_MAP = {
+    "kitchen": "主厨房",
+    "storage": "储藏间",
+    "garage": "车库工具",
+}
+
+
+def _space_id_to_name(space_id: str) -> str:
+    return _SPACE_NAME_MAP.get(space_id, space_id)
+
+
+# ====================================================================
+# SpatialNode data access
+# ====================================================================
+
+
+def create_spatial_node(conn: sqlite3.Connection, node: SpatialNode) -> SpatialNode:
+    """Insert a spatial node."""
+    if not node.node_id:
+        node.node_id = f"sn-{uuid4().hex[:12]}"
+    conn.execute(
+        """INSERT INTO spatial_nodes(node_id, node_type, parent_id, name, aliases)
+           VALUES(?, ?, ?, ?, ?)
+           ON CONFLICT(node_id) DO UPDATE SET
+               node_type=excluded.node_type,
+               parent_id=excluded.parent_id,
+               name=excluded.name,
+               aliases=excluded.aliases""",
+        (node.node_id, node.node_type, node.parent_id, node.name,
+         json.dumps(node.aliases, ensure_ascii=False) if node.aliases else None),
+    )
+    return node
+
+
+def _row_to_spatial_node(row: sqlite3.Row) -> SpatialNode:
+    return SpatialNode(
+        node_id=row["node_id"],
+        node_type=row["node_type"],
+        parent_id=row["parent_id"],
+        name=row["name"],
+        aliases=json.loads(row["aliases"]) if row["aliases"] else [],
+        created_at=row["created_at"] or "",
+    )
+
+
+def find_node_by_alias(conn: sqlite3.Connection, alias: str) -> SpatialNode | None:
+    """Find a spatial node by exact alias match (case-insensitive)."""
+    all_nodes = conn.execute("SELECT * FROM spatial_nodes").fetchall()
+    for row in all_nodes:
+        if row["aliases"]:
+            aliases = json.loads(row["aliases"])
+            if any(alias.lower() == a.lower() for a in aliases):
+                return _row_to_spatial_node(row)
+        if alias.lower() == row["name"].lower():
+            return _row_to_spatial_node(row)
+    return None
+
+
+def find_nodes_by_name_fragment(conn: sqlite3.Connection, fragment: str) -> list[SpatialNode]:
+    """Find nodes where name or aliases contain the given fragment."""
+    all_nodes = conn.execute("SELECT * FROM spatial_nodes").fetchall()
+    results = []
+    for row in all_nodes:
+        if fragment.lower() in row["name"].lower():
+            results.append(_row_to_spatial_node(row))
+            continue
+        if row["aliases"]:
+            aliases = json.loads(row["aliases"])
+            if any(fragment.lower() in a.lower() for a in aliases):
+                results.append(_row_to_spatial_node(row))
+    return results
+
+
+def get_child_node_ids(conn: sqlite3.Connection, node_id: str) -> list[str]:
+    """Get all descendant Slot node IDs for a given parent."""
+    all_nodes = conn.execute("SELECT node_id, parent_id, node_type FROM spatial_nodes").fetchall()
+    parent_map: dict[str, list[dict]] = {}
+    for row in all_nodes:
+        pid = row["parent_id"] or ""
+        if pid not in parent_map:
+            parent_map[pid] = []
+        parent_map[pid].append({"id": row["node_id"], "type": row["node_type"]})
+
+    result: list[str] = []
+    stack = [node_id]
+    while stack:
+        current = stack.pop()
+        for child in parent_map.get(current, []):
+            if child["type"] == "Slot":
+                result.append(child["id"])
+            stack.append(child["id"])
+    return result
+
+
+def seed_spatial_nodes(conn: sqlite3.Connection) -> None:
+    """Create default SpatialNode hierarchy from existing spaces."""
+    from app.models.schemas import NodeType
+
+    # Zone: kitchen
+    kitchen_zone = SpatialNode(node_id="zone-kitchen", node_type="Zone", name="主厨房",
+                                aliases=["厨房", "灶间", "厨房区域"])
+    create_spatial_node(conn, kitchen_zone)
+    _add_kitchen_nodes(conn, "zone-kitchen")
+
+    # Zone: storage
+    storage_zone = SpatialNode(node_id="zone-storage", node_type="Zone", name="储藏间",
+                                aliases=["储藏室", "储物间", "杂物间"])
+    create_spatial_node(conn, storage_zone)
+    _add_storage_nodes(conn, "zone-storage")
+
+    # Zone: garage
+    garage_zone = SpatialNode(node_id="zone-garage", node_type="Zone", name="车库工具",
+                               aliases=["车库", "工具间", "地下室"])
+    create_spatial_node(conn, garage_zone)
+    _add_garage_nodes(conn, "zone-garage")
+
+
+def _add_kitchen_nodes(conn: sqlite3.Connection, parent_id: str) -> None:
+    fridge = SpatialNode(node_id="fixture-fridge", node_type="Fixture", parent_id=parent_id,
+                          name="冰箱", aliases=["冷藏", "冷冻", "冰柜", "雪柜"])
+    create_spatial_node(conn, fridge)
+    create_spatial_node(conn, SpatialNode(node_id="slot-fridge-top", node_type="Slot", parent_id=fridge.node_id,
+                                           name="冰箱上层", aliases=["冰箱上层", "冷冻层", "上格"]))
+    create_spatial_node(conn, SpatialNode(node_id="slot-fridge-mid", node_type="Slot", parent_id=fridge.node_id,
+                                           name="冰箱中层", aliases=["冰箱中层", "冷藏层", "中格"]))
+    create_spatial_node(conn, SpatialNode(node_id="slot-fridge-bottom", node_type="Slot", parent_id=fridge.node_id,
+                                           name="冰箱下层", aliases=["冰箱下层", "保鲜层", "下格", "下面", "底下", "下方"]))
+
+    cabinet = SpatialNode(node_id="fixture-cabinet", node_type="Fixture", parent_id=parent_id,
+                           name="橱柜", aliases=["柜子", "储物柜", "吊柜"])
+    create_spatial_node(conn, cabinet)
+    create_spatial_node(conn, SpatialNode(node_id="slot-cabinet-top", node_type="Slot", parent_id=cabinet.node_id,
+                                           name="橱柜上层", aliases=["橱柜上层", "吊柜上层", "上面"]))
+    create_spatial_node(conn, SpatialNode(node_id="slot-cabinet-bottom", node_type="Slot", parent_id=cabinet.node_id,
+                                           name="橱柜下层", aliases=["橱柜下层", "下面的抽屉", "下层", "抽屉"]))
+
+
+def _add_storage_nodes(conn: sqlite3.Connection, parent_id: str) -> None:
+    shelf = SpatialNode(node_id="fixture-storage-shelf", node_type="Fixture", parent_id=parent_id,
+                         name="储物搁板", aliases=["搁板", "架子", "货架"])
+    create_spatial_node(conn, shelf)
+    create_spatial_node(conn, SpatialNode(node_id="slot-storage-a", node_type="Slot", parent_id=shelf.node_id,
+                                           name="储物间 A 区", aliases=["A区", "A搁板", "左边"]))
+    create_spatial_node(conn, SpatialNode(node_id="slot-storage-b", node_type="Slot", parent_id=shelf.node_id,
+                                           name="储物间 B 区", aliases=["B区", "B搁板", "药品箱", "右边"]))
+
+
+def _add_garage_nodes(conn: sqlite3.Connection, parent_id: str) -> None:
+    rack = SpatialNode(node_id="fixture-garage-rack", node_type="Fixture", parent_id=parent_id,
+                        name="车库货架", aliases=["工具架", "货架", "置物架"])
+    create_spatial_node(conn, rack)
+    create_spatial_node(conn, SpatialNode(node_id="slot-garage-a4", node_type="Slot", parent_id=rack.node_id,
+                                           name="车库 A4 搁板", aliases=["A4", "A4搁板"]))
+    create_spatial_node(conn, SpatialNode(node_id="slot-garage-b3", node_type="Slot", parent_id=rack.node_id,
+                                           name="车库 B3 搁板", aliases=["B3", "B3搁板"]))
 
 
 def replace_spaces(conn: sqlite3.Connection, spaces: list[Space]) -> None:
@@ -423,7 +922,7 @@ def set_onboarding_done(conn: sqlite3.Connection, done: bool) -> None:
 
 
 def get_state(conn: sqlite3.Connection) -> AppState:
-    items = list_items(conn)
+    items = join_all_items(conn)
     return AppState(
         onboardingDone=get_onboarding_done(conn),
         spaces=list_spaces(conn, items),

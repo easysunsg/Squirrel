@@ -1,7 +1,11 @@
+import json
 import logging
 import uuid
+from typing import Any, Generator
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, ValidationError
 
 from app.core.config import settings
 from app.db.sqlite import (
@@ -16,6 +20,7 @@ from app.db.sqlite import (
     get_pending_consume,
     get_state,
     init_db,
+    join_all_items,
     list_items,
     list_messages,
     replace_messages,
@@ -25,6 +30,7 @@ from app.db.sqlite import (
 )
 from app.models.schemas import AppState, ChatRequest, ChatResult, ConfirmRequest, ConsumeConfirmRequest, Item, Message, RecipeRequest, TextRequest
 from app.services.ai import ai_service
+from app.services.conflict_service import ConflictService
 from app.services.markdown import item_status, sync_inventory_markdown
 from app.services.vector_store import vector_store
 
@@ -47,166 +53,43 @@ def apply_item_patch(existing: Item, patch: dict) -> Item:
     return Item.model_validate(data)
 
 
-def match_items(inventory: list[Item], target: str | None) -> list[Item]:
-    if not target:
-        return []
-    exact = [item for item in inventory if item.title == target]
-    if exact:
-        return exact
-    partial = [item for item in inventory if target in item.title or item.title in target]
-    if partial:
-        return partial
-    return [item for item in inventory if target in item.location or target in item.spaceName]
+conflict_service = ConflictService()
 
 
-def build_candidate_suggestion(candidates: list[Item]) -> dict:
-    return {
-        "matches": [
-            {
-                "id": item.id,
-                "title": item.title,
-                "spaceName": item.spaceName,
-                "location": item.location,
-                "count": item.count,
-                "remainingPct": item.remainingPct,
-            }
-            for item in candidates[:6]
-        ]
-    }
+def _materialize_db_operations(conn, db_ops: dict) -> tuple[list[Item], str | None, list[Item] | None]:
+    """Route layer — pure DB plumbing, ZERO business logic.
 
-
-def execute_chat_operations(chat_result: ChatResult, conn, inventory: list[Item]) -> tuple[ChatResult, list[Item], list[str]]:
+    Takes db_operations dict from graph and materializes them into SQL writes.
+    Returns (updated_items, pending_id, pending_items).
+    """
     updated_items: list[Item] = []
-    deleted_ids: list[str] = []
 
-    # === 拦截 add 操作，存 pending 不入库 ===
-    add_ops = [op for op in chat_result.operations if op.type == "add" and op.item]
-    if add_ops:
-        pending_items = [op.item for op in add_ops]
+    # upsert_items
+    for item in db_ops.get("upsert_items", []):
+        created = upsert_item(conn, item)
+        updated_items.append(created)
+
+    # delete_ids
+    for item_id in db_ops.get("delete_ids", []):
+        delete_item(conn, item_id)
+
+    # pending_add — create pending confirmation records
+    pending_items = db_ops.get("pending_add", [])
+    pending_consume = db_ops.get("pending_consume", {})
+
+    if pending_items:
         pending_id = create_pending_confirmation(conn, pending_items)
-        chat_result.needsConfirmation = True
-        chat_result.pendingId = pending_id
-        chat_result.itemSuggestion = {
-            "pendingId": pending_id,
-            "items": [item.model_dump() for item in pending_items],
-        }
-        chat_result.replyText = f"已识别出 {len(pending_items)} 件物品，请确认后再入库。"
-        non_add_ops = [op for op in chat_result.operations if op.type != "add"]
-        if not non_add_ops:
-            return chat_result, [], []
-        chat_result.operations = non_add_ops
+        # Return pending_id to caller so it can be attached to chat_result
+        return updated_items, pending_id, pending_items
 
-    # === 拦截 consume 操作：多候选或单候选都需要用户确认 ===
-    consume_ops = [op for op in chat_result.operations if op.type in ("consume", "remove")]
-    if consume_ops:
-        # 如果 graph 已经返回了候选列表（多候选或无匹配），直接存 pending
-        existing_matches = (chat_result.itemSuggestion or {}).get("matches")
-        if existing_matches is not None:
-            candidates = [Item.model_validate(m) for m in existing_matches]
-            if candidates:
-                op = consume_ops[0]
-                context = {"consumeAll": op.consumeAll, "patch": op.patch}
-                pending_id = create_pending_consume(conn, candidates, context)
-                chat_result.pendingId = pending_id
-                chat_result.itemSuggestion["pendingId"] = pending_id
-            return chat_result, [], []
-
-        # 单候选：graph 找到了唯一匹配，也需要用户确认后执行
-        for operation in consume_ops:
-            candidates = match_items(inventory, operation.target)
-            if not candidates:
-                return (
-                    ChatResult(
-                        intent=chat_result.intent,
-                        replyText="我暂时没找到对应物品，请说得更具体一点。",
-                        needsConfirmation=True,
-                        itemSuggestion={"matches": []},
-                    ),
-                    [],
-                    [],
-                )
-            if len(candidates) > 1:
-                context = {"consumeAll": operation.consumeAll, "patch": operation.patch}
-                pending_id = create_pending_consume(conn, candidates[:6], context)
-                lines = [f"找到 {len(candidates)} 个匹配物品，请回复序号选择："]
-                for i, item in enumerate(candidates[:6], 1):
-                    unit_part = f"{item.count}{item.unit}" if item.count else ""
-                    lines.append(f"{i}. {item.title} — {item.spaceName}/{item.location} ({unit_part})")
-                if operation.consumeAll:
-                    lines.append("回复「全部」将清除所有匹配项")
-                reply_text = "\n".join(lines)
-                return (
-                    ChatResult(
-                        intent=chat_result.intent,
-                        replyText=reply_text,
-                        needsConfirmation=True,
-                        pendingId=pending_id,
-                        itemSuggestion={
-                            "pendingId": pending_id,
-                            "matches": [item.model_dump() for item in candidates[:6]],
-                            "consumeAll": operation.consumeAll,
-                        },
-                    ),
-                    [],
-                    [],
-                )
-            # 单候选也需要确认
-            context = {"consumeAll": operation.consumeAll, "patch": operation.patch}
+    if pending_consume:
+        candidates = pending_consume.get("candidates", [])
+        context = pending_consume.get("context", {})
+        if candidates:
             pending_id = create_pending_consume(conn, candidates, context)
-            item = candidates[0]
-            unit_part = f"{item.count}{item.unit}" if item.count else ""
-            reply_text = (
-                f"找到「{item.title}」— {item.spaceName}/{item.location} "
-                f"({unit_part}，剩余{item.remainingPct}%)，确认要操作吗？\n"
-                f"回复「1」确认，或输入其他内容取消。"
-            )
-            return (
-                ChatResult(
-                    intent=chat_result.intent,
-                    replyText=reply_text,
-                    needsConfirmation=True,
-                    pendingId=pending_id,
-                    itemSuggestion={
-                        "pendingId": pending_id,
-                        "matches": [item.model_dump() for item in candidates],
-                        "consumeAll": operation.consumeAll,
-                    },
-                ),
-                [],
-                [],
-            )
+            return updated_items, pending_id, candidates
 
-    # === 其他操作（update 等）直接执行 ===
-    for operation in chat_result.operations:
-        candidates = match_items(inventory, operation.target)
-        if not candidates:
-            return (
-                ChatResult(
-                    intent=chat_result.intent,
-                    replyText="我暂时没找到对应物品，请说得更具体一点。",
-                    needsConfirmation=True,
-                ),
-                [],
-                [],
-            )
-        if len(candidates) > 1:
-            return (
-                ChatResult(
-                    intent=chat_result.intent,
-                    replyText="我找到了多个候选物品，麻烦你说得更具体一点。",
-                    itemSuggestion=build_candidate_suggestion(candidates),
-                    needsConfirmation=True,
-                ),
-                [],
-                [],
-            )
-
-        target_item = candidates[0]
-        patch = operation.patch or {}
-        updated = upsert_item(conn, apply_item_patch(target_item, patch))
-        updated_items.append(updated)
-
-    return chat_result, updated_items, deleted_ids
+    return updated_items, None, None
 
 
 @router.get("/health")
@@ -357,10 +240,49 @@ def cli_add(request: TextRequest):
 @router.post("/chat")
 def chat(request: ChatRequest):
     logger.info("Chat requested historyLength=%d", len(request.chatHistory) if request.chatHistory else 0)
+    return StreamingResponse(
+        _chat_sse(request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+class PydanticEncoder(json.JSONEncoder):
+    """JSON encoder that handles Pydantic BaseModel objects."""
+    def default(self, obj):
+        if isinstance(obj, BaseModel):
+            return obj.model_dump()
+        return super().default(obj)
+
+
+def _chat_sse(request: ChatRequest) -> Generator[str, None, None]:
+    """SSE generator yielding status/result/error events for /api/chat."""
+
+    def _event(event_type: str, data: Any) -> str:
+        return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False, cls=PydanticEncoder)}\n\n"
+
+    try:
+        yield _event("status", {"stage": "processing"})
+        result = _process_chat(request)
+        yield _event("status", {"stage": "complete"})
+        yield _event("result", result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Chat SSE failed")
+        yield _event("error", {"detail": str(e)})
+
+
+def _process_chat(request: ChatRequest) -> dict:
+    """Core chat processing — runs the graph, materializes db_operations, returns response dict."""
     with connect() as conn:
         history = request.chatHistory or list_messages(conn)
         latest = history[-1].text if history else ""
-        inventory = list_items(conn)
+        inventory = join_all_items(conn)
 
         # === 加载持久化的跨轮次状态 ===
         conv_state = get_conversation_state(conn)
@@ -370,7 +292,7 @@ def chat(request: ChatRequest):
         last_added_item = conv_state.get("last_added_item")
         current_context_item = conv_state.get("current_context_item")
 
-        # 将完整状态注入 graph
+        # === 将完整状态注入 graph（所有业务逻辑都在 graph 中执行） ===
         graph_result = ai_service.chat(
             latest,
             inventory,
@@ -379,8 +301,22 @@ def chat(request: ChatRequest):
             pending_operation=pending_operation,
             last_added_item=last_added_item,
             current_context_item=current_context_item,
+            current_user_id=request.userId,
+            current_user_name=request.userName,
         )
         chat_result = graph_result.get("chat_result", ChatResult())
+        db_ops = graph_result.get("db_operations", {})
+
+        # === 冲突检测（在物化之前执行） ===
+        conflict_skus = getattr(chat_result, "conflictCheckSkus", [])
+        for sku_title in conflict_skus:
+            warning = conflict_service.check_recent_same_sku(
+                conn, sku_title, request.userName, window_hours=3
+            )
+            if warning:
+                warning_text = f"⚠️ {warning.warning_text}"
+                chat_result.replyText = warning_text + "\n\n" + (chat_result.replyText or "")
+                chat_result.needsConfirmation = True
 
         # === 从 graph 返回的交互状态写回 SQLite ===
         new_mode = graph_result.get("interaction_mode") or "normal"
@@ -390,68 +326,14 @@ def chat(request: ChatRequest):
         new_context_item = graph_result.get("current_context_item") if "current_context_item" in graph_result else current_context_item
         save_conversation_state(conn, new_mode, new_selection, new_operation, new_last_added, new_context_item)
 
-        # === 多选批量操作（优先于单选） ===
-        if chat_result.confirmedItemIds:
-            item_ids = set(chat_result.confirmedItemIds)
+        # === 物化 DB 操作（纯数据管道，无业务逻辑） ===
+        updated_items, pending_id, pending_items = _materialize_db_operations(conn, db_ops)
 
-            # 批量属性修改（confirmedPatch）
-            if chat_result.confirmedPatch:
-                patched_titles = []
-                for sel_item in (pending_selection or []):
-                    sel_id = sel_item.get("id")
-                    if sel_id not in item_ids:
-                        continue
-                    target_item = next((it for it in inventory if it.id == sel_id), None)
-                    if not target_item:
-                        current_items = list_items(conn)
-                        target_item = next((it for it in current_items if it.id == sel_id), None)
-                    if target_item:
-                        upsert_item(conn, apply_item_patch(target_item, chat_result.confirmedPatch))
-                        patched_titles.append(target_item.title)
-                reply_text = f"已更新 {len(patched_titles)} 件物品：{'、'.join(patched_titles)}。"
-
-            # 批量消耗/删除
-            elif chat_result.confirmedDeductCounts:
-                deduct_map = chat_result.confirmedDeductCounts
-                parts = []
-                for sel_item in (pending_selection or []):
-                    sel_id = sel_item.get("id")
-                    if sel_id not in item_ids:
-                        continue
-                    target_item = next((it for it in inventory if it.id == sel_id), None)
-                    if not target_item:
-                        current_items = list_items(conn)
-                        target_item = next((it for it in current_items if it.id == sel_id), None)
-                    if not target_item:
-                        continue
-                    deduct_count = deduct_map.get(sel_id, 0)
-                    if deduct_count > 0:
-                        if deduct_count >= target_item.count:
-                            delete_item(conn, sel_id)
-                            parts.append(f"「{target_item.title}」已消耗完")
-                        else:
-                            new_count = target_item.count - deduct_count
-                            new_pct = max(0, round(new_count / max(target_item.count, 1) * 100))
-                            upsert_item(conn, apply_item_patch(target_item, {"count": new_count, "remainingPct": new_pct}))
-                            parts.append(f"「{target_item.title}」消耗{deduct_count}{target_item.unit}，剩余{new_count}{target_item.unit}")
-                reply_text = "已批量消耗：\n" + "；".join(parts) if parts else "未执行任何操作。"
-
-            else:
-                # 无 deductCount → 批量删除（remove 路径）
-                deleted_titles = []
-                for sel_item in (pending_selection or []):
-                    sel_id = sel_item.get("id")
-                    if sel_id in item_ids and sel_id:
-                        delete_item(conn, sel_id)
-                        deleted_titles.append(sel_item.get("title", ""))
-                reply_text = f"已移除 {len(deleted_titles)} 件物品。"
-
-            chat_result.replyText = reply_text
-
-            # 构造确认消息（同单选的模式）
-            from uuid import uuid4
+        if chat_result.confirmedItemIds or chat_result.confirmedItemId is not None:
+            # confirmed 路径：已有 replyText，构造确认消息
+            reply_text = chat_result.replyText or "操作已完成。"
             confirm_message = Message(
-                id=f"msg-batch-{uuid4().hex[:8]}",
+                id=f"msg-batch-{uuid.uuid4().hex[:8]}",
                 sender="assistant",
                 text=reply_text,
                 timestamp="刚刚",
@@ -459,99 +341,27 @@ def chat(request: ChatRequest):
             history.append(confirm_message)
             replace_messages(conn, history)
             state = get_state(conn)
-
             sync_inventory_markdown(state)
             vector_store.upsert_items(state.items)
-
             return {
                 "reply": reply_text,
                 "messages": history,
                 "items": state.items,
             }
 
-        # === 如果 graph 确认了物品选择（单选），直接执行操作 ===
-        elif chat_result.confirmedItemId is not None:
-            item_id = chat_result.confirmedItemId
+        # === pending 路径 ===
+        if pending_id and pending_items is not None:
+            chat_result.pendingId = pending_id
+            if chat_result.itemSuggestion:
+                chat_result.itemSuggestion["pendingId"] = pending_id
+            elif pending_items:
+                chat_result.itemSuggestion = {
+                    "pendingId": pending_id,
+                    "items": [item.model_dump() for item in pending_items],
+                }
+            chat_result.needsConfirmation = True
 
-            # 情况 1：属性修改（confirmedPatch）
-            if chat_result.confirmedPatch:
-                target_item = next((it for it in inventory if it.id == item_id), None)
-                if not target_item:
-                    current_items = list_items(conn)
-                    target_item = next((it for it in current_items if it.id == item_id), None)
-                if target_item:
-                    upsert_item(conn, apply_item_patch(target_item, chat_result.confirmedPatch))
-                    reply_text = chat_result.replyText or f"已更新「{target_item.title}」。"
-                else:
-                    reply_text = "该物品已不存在，可能已被其他操作处理。"
-                chat_result.replyText = reply_text
-
-            # 情况 2：全部清除
-            elif chat_result.confirmedAllItems:
-                deleted_titles: list[str] = []
-                if pending_selection:
-                    for sel in pending_selection:
-                        sel_id = sel.get("id")
-                        if sel_id:
-                            delete_item(conn, sel_id)
-                            deleted_titles.append(sel.get("title", ""))
-                unique_titles = list(dict.fromkeys(deleted_titles))
-                reply_text = f"已清除所有匹配物品：{'、'.join(unique_titles)}。" if unique_titles else "已批量清除。"
-                chat_result.replyText = reply_text
-
-            # 情况 3：消耗/删除单个物品
-            else:
-                target_item = next((it for it in inventory if it.id == item_id), None)
-                if not target_item:
-                    current_items = list_items(conn)
-                    target_item = next((it for it in current_items if it.id == item_id), None)
-                if target_item:
-                    deduct_count = chat_result.confirmedDeductCount
-                    if deduct_count is not None and deduct_count > 0:
-                        if deduct_count >= target_item.count:
-                            delete_item(conn, item_id)
-                            reply_text = f"已消耗完「{target_item.title}」（{target_item.count}{target_item.unit}），已从库存移除。"
-                        else:
-                            new_count = target_item.count - deduct_count
-                            new_pct = max(0, round(new_count / max(target_item.count, 1) * 100))
-                            upsert_item(conn, apply_item_patch(target_item, {"count": new_count, "remainingPct": new_pct}))
-                            reply_text = f"已消耗 {deduct_count}{target_item.unit}「{target_item.title}」，剩余 {new_count}{target_item.unit}。"
-                    else:
-                        if target_item.count > 1:
-                            new_count = target_item.count - 1
-                            new_pct = max(0, round(new_count / max(target_item.count, 1) * 100))
-                            upsert_item(conn, apply_item_patch(target_item, {"count": new_count, "remainingPct": new_pct}))
-                            reply_text = f"已消耗 1{target_item.unit}「{target_item.title}」，剩余 {new_count}{target_item.unit}。"
-                        else:
-                            delete_item(conn, item_id)
-                            reply_text = f"已消耗完「{target_item.title}」，已从库存移除。"
-                else:
-                    reply_text = "该物品已不存在，可能已被其他操作处理。"
-                chat_result.replyText = reply_text
-
-            # 构造确认消息
-            from uuid import uuid4
-            confirm_message = Message(
-                id=f"msg-consume-{uuid4().hex[:8]}",
-                sender="assistant",
-                text=reply_text,
-                timestamp="刚刚",
-            )
-            history.append(confirm_message)
-            replace_messages(conn, history)
-            state = get_state(conn)
-
-            sync_inventory_markdown(state)
-            vector_store.upsert_items(state.items)
-
-            return {
-                "reply": reply_text,
-                "messages": history,
-                "items": state.items,
-            }
-
-        # === 剩余逻辑：原有的 execute_chat_operations + 消息存储 ===
-        chat_result, updated_items, deleted_ids = execute_chat_operations(chat_result, conn, inventory)
+        # === 构建消息 ===
         full_history = history.copy()
         assistant_message = Message(
             id=f"msg-ai-{uuid.uuid4().hex[:8]}",
@@ -564,7 +374,7 @@ def chat(request: ChatRequest):
         replace_messages(conn, full_history)
         state = get_state(conn)
 
-    # === 有 pending 时不执行 sync_outputs ===
+    # === 有 pending 时不执行 sync_outputs（等用户确认） ===
     if chat_result.pendingId:
         return {
             "reply": chat_result.replyText,
@@ -575,12 +385,9 @@ def chat(request: ChatRequest):
             "items": state.items,
         }
 
-    if updated_items or deleted_ids:
+    if updated_items:
         sync_inventory_markdown(state)
-        if updated_items:
-            vector_store.upsert_items(updated_items)
-        for item_id in deleted_ids:
-            vector_store.delete_item(item_id)
+        vector_store.upsert_items(updated_items)
 
     return {
         "reply": chat_result.replyText,

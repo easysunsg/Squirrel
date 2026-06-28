@@ -19,6 +19,8 @@ class AiService:
         pending_operation: dict | None = None,
         last_added_item: dict | None = None,
         current_context_item: dict | None = None,
+        current_user_id: str = "default_user",
+        current_user_name: str = "主人",
     ) -> dict:
         return run_squirrel_graph(
             text,
@@ -28,6 +30,8 @@ class AiService:
             pending_operation=pending_operation,
             last_added_item=last_added_item,
             current_context_item=current_context_item,
+            current_user_id=current_user_id,
+            current_user_name=current_user_name,
         )
 
     def recipe(self, request: RecipeRequest, inventory: list[Item]) -> dict:

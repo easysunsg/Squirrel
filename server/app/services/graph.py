@@ -1,11 +1,14 @@
 import logging
 from typing import TypedDict
+from uuid import uuid4
 
 from app.models.schemas import ChatOperation, ChatResult, Item, RecipeRequest
 from app.services.cache import get_recipe_cache, set_recipe_cache
+from app.services.conflict_service import conflict_service
 from app.services.llm import llm_service
 from app.services.markdown import item_status
 from app.services.parser import build_chat_result, extract_remaining_patch, extract_search_keyword, infer_search_terms, parse_lightning_text
+from app.services.spatial_service import spatial_service
 from app.services.vector_store import vector_store
 
 logger = logging.getLogger(__name__)
@@ -25,6 +28,11 @@ class SquirrelGraphState(TypedDict, total=False):
     pending_operation: dict | None # {"type":"update_location","patch":{"location":"冰箱上层"},"target":"牛奶"} 等待序号确认的操作
     last_added_item: dict | None   # 最近一次新增成功的物品（用于近指代）
     current_context_item: dict | None  # 当前对话上下文物品（用于省略句补全）
+    # === 数据库操作指令（新路由层只负责物化，不参与决策） ===
+    db_operations: dict            # {"upsert_items":[],"delete_ids":[],"pending_add":[],"pending_consume":{}}
+    # === 多租户身份 ===
+    current_user_id: str
+    current_user_name: str
 
 
 def summarize_titles(items: list[Item], limit: int = 6) -> str:
@@ -271,7 +279,7 @@ def add_node(state: SquirrelGraphState) -> SquirrelGraphState:
 
 
 def _match_items_3tier(inventory: list[Item], target: str | None) -> list[Item]:
-    """3-tier matching: exact → substring → location/space."""
+    """3-tier matching: exact → substring → spatial path → location/space fallback."""
     if not target:
         return []
     exact = [item for item in inventory if item.title == target]
@@ -280,6 +288,13 @@ def _match_items_3tier(inventory: list[Item], target: str | None) -> list[Item]:
     partial = [item for item in inventory if target in item.title or item.title in target]
     if partial:
         return partial
+    # Tier 3: SpatialNode-based location matching
+    slot_ids = spatial_service.resolve_location_to_slots(target)
+    if slot_ids:
+        results = [item for item in inventory if item.belongsToSlotId in slot_ids]
+        if results:
+            return results
+    # Tier 4: String-contains fallback
     return [item for item in inventory if target in item.location or target in item.spaceName]
 
 
@@ -882,6 +897,7 @@ def post_process(state: SquirrelGraphState) -> SquirrelGraphState:
         "pending_item_selection": state.get("pending_item_selection"),
         "pending_operation": state.get("pending_operation"),
         "last_added_item": state.get("last_added_item"),
+        "db_operations": state.get("db_operations", {}),
     }
 
 
@@ -1300,6 +1316,313 @@ def chat_node(state: SquirrelGraphState) -> SquirrelGraphState:
     }
 
 
+# ========== 新节点 Phase 2: execute_operations / execute_confirmed_operations ==========
+
+
+def execute_operations(state: SquirrelGraphState) -> SquirrelGraphState:
+    """执行业务操作——将 operations 转换为 db_operations 元数据。
+
+    此节点取代路由层 execute_chat_operations() 的决策逻辑。
+    只产生 db_operations 元数据，不执行任何 DB 写入。
+    """
+    chat_result = state.get("chat_result", ChatResult())
+    inventory = state.get("inventory", [])
+    current_user = state.get("current_user_name", "主人")
+
+    db_ops: dict = {"upsert_items": [], "delete_ids": [],
+                    "pending_add": [], "pending_consume": {}}
+
+    # === 拦截 add 操作 ===
+    add_ops = [op for op in chat_result.operations if op.type == "add" and op.item]
+    if add_ops:
+        pending_items = [op.item for op in add_ops]
+        db_ops["pending_add"] = pending_items
+        chat_result.needsConfirmation = True
+        chat_result.itemSuggestion = {
+            "pendingId": f"pending-{uuid4().hex[:12]}",
+            "items": [item.model_dump() for item in pending_items],
+        }
+        chat_result.replyText = f"已识别出 {len(pending_items)} 件物品，请确认后再入库。"
+        non_add_ops = [op for op in chat_result.operations if op.type != "add"]
+        if not non_add_ops:
+            chat_result.operations = []
+            return {"chat_result": chat_result, "db_operations": db_ops}
+        chat_result.operations = non_add_ops
+
+    # === 拦截 consume / remove 操作 ===
+    consume_ops = [op for op in chat_result.operations if op.type in ("consume", "remove")]
+    if consume_ops:
+        existing_matches = (chat_result.itemSuggestion or {}).get("matches")
+        if existing_matches is not None:
+            candidates = [Item.model_validate(m) for m in existing_matches]
+            if candidates:
+                op = consume_ops[0]
+                context = {"consumeAll": op.consumeAll, "patch": op.patch}
+                db_ops["pending_consume"] = {"candidates": candidates, "context": context}
+            return {"chat_result": chat_result, "db_operations": db_ops, "current_user_id": state.get("current_user_id")}
+
+        for operation in consume_ops:
+            candidates = _match_items_3tier(inventory, operation.target)
+            if not candidates:
+                return {
+                    "chat_result": ChatResult(
+                        intent=chat_result.intent,
+                        replyText="我暂时没找到对应物品，请说得更具体一点。",
+                        needsConfirmation=True,
+                        itemSuggestion={"matches": []},
+                    ),
+                    "db_operations": db_ops,
+                }
+            if len(candidates) > 1:
+                context = {"consumeAll": operation.consumeAll, "patch": operation.patch}
+                db_ops["pending_consume"] = {"candidates": candidates[:6], "context": context}
+                lines = [f"找到 {len(candidates)} 个匹配物品，请回复序号选择："]
+                for i, item in enumerate(candidates[:6], 1):
+                    unit_part = f"{item.count}{item.unit}" if item.count else ""
+                    lines.append(f"{i}. {item.title} — {item.spaceName}/{item.location} ({unit_part})")
+                if operation.consumeAll:
+                    lines.append("回复「全部」将清除所有匹配项")
+                return {
+                    "chat_result": ChatResult(
+                        intent=chat_result.intent,
+                        replyText="\n".join(lines),
+                        needsConfirmation=True,
+                        itemSuggestion={
+                            "matches": [item.model_dump() for item in candidates[:6]],
+                            "consumeAll": operation.consumeAll,
+                        },
+                    ),
+                    "db_operations": db_ops,
+                }
+            # 单候选也需要确认
+            context = {"consumeAll": operation.consumeAll, "patch": operation.patch}
+            db_ops["pending_consume"] = {"candidates": candidates, "context": context}
+            item = candidates[0]
+            unit_part = f"{item.count}{item.unit}" if item.count else ""
+            return {
+                "chat_result": ChatResult(
+                    intent=chat_result.intent,
+                    replyText=(
+                        f"找到「{item.title}」— {item.spaceName}/{item.location} "
+                        f"({unit_part}，剩余{item.remainingPct}%)，确认要操作吗？\n"
+                        f"回复「1」确认，或输入其他内容取消。"
+                    ),
+                    needsConfirmation=True,
+                    itemSuggestion={
+                        "matches": [item.model_dump() for item in candidates],
+                        "consumeAll": operation.consumeAll,
+                    },
+                ),
+                "db_operations": db_ops,
+            }
+
+    # === 其他操作（update 等）直接执行 ===
+    for operation in chat_result.operations:
+        candidates = _match_items_3tier(inventory, operation.target)
+        if not candidates:
+            return {
+                "chat_result": ChatResult(
+                    intent=chat_result.intent,
+                    replyText="我暂时没找到对应物品，请说得更具体一点。",
+                    needsConfirmation=True,
+                ),
+                "db_operations": db_ops,
+            }
+        if len(candidates) > 1:
+            return {
+                "chat_result": ChatResult(
+                    intent=chat_result.intent,
+                    replyText="我找到了多个候选物品，麻烦你说得更具体一点。",
+                    itemSuggestion=build_candidate_suggestion(candidates),
+                    needsConfirmation=True,
+                ),
+                "db_operations": db_ops,
+            }
+        target_item = candidates[0]
+        patch = operation.patch or {}
+        updated_item = target_item.model_copy(update=patch)
+        updated_item.id = target_item.id
+        db_ops.setdefault("upsert_items", []).append(updated_item)
+
+    return {"chat_result": chat_result, "db_operations": db_ops,
+            "current_user_id": state.get("current_user_id")}
+
+
+def build_candidate_suggestion(candidates: list[Item]) -> dict:
+    return {
+        "matches": [
+            {
+                "id": item.id, "title": item.title,
+                "spaceName": item.spaceName, "location": item.location,
+                "count": item.count, "remainingPct": item.remainingPct,
+            }
+            for item in candidates[:6]
+        ]
+    }
+
+
+def execute_confirmed_operations(state: SquirrelGraphState) -> SquirrelGraphState:
+    """处理已确认的操作——生成 db_operations 元数据。
+
+    此节点取代 _process_chat 中所有 confirmedItemId / confirmedItemIds 分支。
+    只产生 db_operations 元数据，不执行任何 DB 写入。
+    """
+    chat_result = state.get("chat_result", ChatResult())
+    pending_selection = state.get("pending_item_selection") or []
+    inventory = state.get("inventory", [])
+
+    db_ops: dict = {"upsert_items": [], "delete_ids": [],
+                    "pending_add": [], "pending_consume": {}}
+
+    # === 多选批量操作 ===
+    if chat_result.confirmedItemIds:
+        item_ids = set(chat_result.confirmedItemIds)
+
+        # 批量属性修改
+        if chat_result.confirmedPatch:
+            patched_titles = []
+            for sel_item in pending_selection:
+                sel_id = sel_item.get("id")
+                if sel_id not in item_ids:
+                    continue
+                target_item = next((it for it in inventory if it.id == sel_id), None)
+                if target_item:
+                    patched = target_item.model_copy(update=chat_result.confirmedPatch)
+                    patched.id = target_item.id
+                    db_ops["upsert_items"].append(patched)
+                    patched_titles.append(target_item.title)
+            reply_text = f"已更新 {len(patched_titles)} 件物品：{'、'.join(patched_titles)}。"
+
+        # 批量消耗
+        elif chat_result.confirmedDeductCounts:
+            deduct_map = chat_result.confirmedDeductCounts
+            parts = []
+            for sel_item in pending_selection:
+                sel_id = sel_item.get("id")
+                if sel_id not in item_ids:
+                    continue
+                target_item = next((it for it in inventory if it.id == sel_id), None)
+                if not target_item:
+                    continue
+                deduct_count = deduct_map.get(sel_id, 0)
+                if deduct_count > 0:
+                    if deduct_count >= target_item.count:
+                        db_ops["delete_ids"].append(sel_id)
+                        parts.append(f"「{target_item.title}」已消耗完")
+                    else:
+                        new_count = target_item.count - deduct_count
+                        new_pct = max(0, round(new_count / max(target_item.count, 1) * 100))
+                        patched = target_item.model_copy(update={"count": new_count, "remainingPct": new_pct})
+                        patched.id = target_item.id
+                        db_ops["upsert_items"].append(patched)
+                        parts.append(f"「{target_item.title}」消耗{deduct_count}{target_item.unit}，剩余{new_count}{target_item.unit}")
+            reply_text = "已批量消耗：\n" + "；".join(parts) if parts else "未执行任何操作。"
+
+        else:
+            # 批量删除
+            deleted_titles = []
+            for sel_item in pending_selection:
+                sel_id = sel_item.get("id")
+                if sel_id in item_ids and sel_id:
+                    db_ops["delete_ids"].append(sel_id)
+                    deleted_titles.append(sel_item.get("title", ""))
+            reply_text = f"已移除 {len(deleted_titles)} 件物品。"
+
+        chat_result.replyText = reply_text
+        return {"chat_result": chat_result, "db_operations": db_ops}
+
+    # === 单选操作 ===
+    if chat_result.confirmedItemId is not None:
+        item_id = chat_result.confirmedItemId
+
+        # 属性修改
+        if chat_result.confirmedPatch:
+            target_item = next((it for it in inventory if it.id == item_id), None)
+            if target_item:
+                patched = target_item.model_copy(update=chat_result.confirmedPatch)
+                patched.id = target_item.id
+                db_ops["upsert_items"].append(patched)
+                reply_text = chat_result.replyText or f"已更新「{target_item.title}」。"
+            else:
+                reply_text = "该物品已不存在，可能已被其他操作处理。"
+            chat_result.replyText = reply_text
+
+        # 全部清除
+        elif chat_result.confirmedAllItems:
+            deleted_titles = []
+            for sel in pending_selection:
+                sel_id = sel.get("id")
+                if sel_id:
+                    db_ops["delete_ids"].append(sel_id)
+                    deleted_titles.append(sel.get("title", ""))
+            unique_titles = list(dict.fromkeys(deleted_titles))
+            reply_text = f"已清除所有匹配物品：{'、'.join(unique_titles)}。" if unique_titles else "已批量清除。"
+            chat_result.replyText = reply_text
+
+        # 消耗/删除单个
+        else:
+            target_item = next((it for it in inventory if it.id == item_id), None)
+            if target_item:
+                deduct_count = chat_result.confirmedDeductCount
+                if deduct_count is not None and deduct_count > 0:
+                    if deduct_count >= target_item.count:
+                        db_ops["delete_ids"].append(item_id)
+                        reply_text = f"已消耗完「{target_item.title}」（{target_item.count}{target_item.unit}），已从库存移除。"
+                    else:
+                        new_count = target_item.count - deduct_count
+                        new_pct = max(0, round(new_count / max(target_item.count, 1) * 100))
+                        patched = target_item.model_copy(update={"count": new_count, "remainingPct": new_pct})
+                        patched.id = target_item.id
+                        db_ops["upsert_items"].append(patched)
+                        reply_text = f"已消耗 {deduct_count}{target_item.unit}「{target_item.title}」，剩余 {new_count}{target_item.unit}。"
+                else:
+                    if target_item.count > 1:
+                        new_count = target_item.count - 1
+                        new_pct = max(0, round(new_count / max(target_item.count, 1) * 100))
+                        patched = target_item.model_copy(update={"count": new_count, "remainingPct": new_pct})
+                        patched.id = target_item.id
+                        db_ops["upsert_items"].append(patched)
+                        reply_text = f"已消耗 1{target_item.unit}「{target_item.title}」，剩余 {new_count}{target_item.unit}。"
+                    else:
+                        db_ops["delete_ids"].append(item_id)
+                        reply_text = f"已消耗完「{target_item.title}」，已从库存移除。"
+            else:
+                reply_text = "该物品已不存在，可能已被其他操作处理。"
+            chat_result.replyText = reply_text
+
+        return {"chat_result": chat_result, "db_operations": db_ops}
+
+    return {"chat_result": chat_result, "db_operations": db_ops}
+
+
+# ========== 多租户冲突检测节点 ==========
+
+
+def conflict_check_node(state: SquirrelGraphState) -> SquirrelGraphState:
+    """检查即将新增的 SKU 是否在短时间内被其他用户操作过。
+
+    若有冲突，在 replyText 追加预警信息。
+    """
+    chat_result = state.get("chat_result", ChatResult())
+    # This node runs before add_node, so operations exist but haven't been materialized yet
+    add_ops = [op for op in chat_result.operations if op.type == "add" and op.item]
+    if not add_ops:
+        return state  # no add operations, skip conflict check
+
+    current_user = state.get("current_user_name", "主人")
+    # Conflict check is delegated to the route layer via db_operations metadata
+    # The graph just flags that a check is needed
+    pending_items = [op.item for op in add_ops]
+    sku_titles = list(dict.fromkeys(item.title for item in pending_items if item.title))
+
+    if sku_titles:
+        chat_result.conflictCheckSkus = sku_titles  # type: ignore
+
+    return {"chat_result": chat_result,
+            "current_user_name": current_user,
+            "current_user_id": state.get("current_user_id")}
+
+
 def build_squirrel_graph():
     from langgraph.graph import END, START, StateGraph
 
@@ -1311,6 +1634,11 @@ def build_squirrel_graph():
     graph.add_node("confirm_multi_selection", confirm_multi_selection_node)
     graph.add_node("reset_selection", reset_selection_node)
     graph.add_node("invalid_selection", invalid_selection_node)
+
+    # === Phase 2 新节点 ===
+    graph.add_node("execute_operations", execute_operations)
+    graph.add_node("execute_confirmed_operations", execute_confirmed_operations)
+    graph.add_node("conflict_check", conflict_check_node)
 
     # 原有节点
     graph.add_node("classify_intent", classify_intent)
@@ -1350,7 +1678,7 @@ def build_squirrel_graph():
         "classify_intent",
         route_by_intent,
         {
-            "add": "add",
+            "add": "conflict_check",       # 新增前做冲突检测
             "consume": "consume",
             "remove": "remove",
             "update_location": "update_location",
@@ -1366,16 +1694,29 @@ def build_squirrel_graph():
         },
     )
 
-    # === 操作节点 + 选择节点 → post_process → END ===
-    # 所有可能修改状态/需要清理的节点先过 post_process
-    for node in [
-        "confirm_selection", "confirm_selection_all", "confirm_multi_selection",
-        "reset_selection", "invalid_selection",
-        "add", "consume", "remove",
-        "update_location", "update_expiry", "update_remaining",
-    ]:
-        graph.add_edge(node, "post_process")
+    # === 冲突检测 → add → execute_operations ===
+    graph.add_edge("conflict_check", "add")
+
+    # === 更新类节点 → execute_confirmed_operations（单候选直接确认） ===
+    for node in ["update_location", "update_expiry", "update_remaining"]:
+        graph.add_edge(node, "execute_confirmed_operations")
+
+    # === add / consume / remove → execute_operations ===
+    for node in ["add", "consume", "remove"]:
+        graph.add_edge(node, "execute_operations")
+
+    # === 选择节点 → execute_confirmed_operations ===
+    for node in ["confirm_selection", "confirm_selection_all", "confirm_multi_selection"]:
+        graph.add_edge(node, "execute_confirmed_operations")
+
+    # === execute_operations / execute_confirmed_operations → post_process → END ===
+    graph.add_edge("execute_operations", "post_process")
+    graph.add_edge("execute_confirmed_operations", "post_process")
     graph.add_edge("post_process", END)
+
+    # === 重置/无效选择 → post_process → END ===
+    for node in ["reset_selection", "invalid_selection"]:
+        graph.add_edge(node, "post_process")
 
     # === 查询节点 + 闲聊 + 菜谱：不涉及状态修改，直接到 END ===
     for node in [
@@ -1400,6 +1741,8 @@ def run_squirrel_graph(
     current_context_item: dict | None = None,
     user_preference: str = "无特殊要求",
     reminder_time: str = "",
+    current_user_id: str = "default_user",
+    current_user_name: str = "主人",
 ) -> SquirrelGraphState:
     """支持跨轮次选择状态传递。"""
     return squirrel_graph.invoke({
@@ -1412,4 +1755,6 @@ def run_squirrel_graph(
         "current_context_item": current_context_item,
         "user_preference": user_preference,
         "reminder_time": reminder_time,
+        "current_user_id": current_user_id,
+        "current_user_name": current_user_name,
     })

@@ -199,9 +199,68 @@ def extract_remaining_patch(text: str, item: Item | None = None) -> dict[str, in
     return None
 
 
-# ---------------------------------------------------------------------------
-# Multi-item selection parsing (pure rule-based, no LLM)
-# ---------------------------------------------------------------------------
+def is_query_total(text: str) -> bool:
+    """检测是否为库存总量查询意图（最高优先级）。
+
+    触发词：多少、总数、一共、合计、存量、清点、统计、有几瓶、有几个、全部库存
+    语义特征：用户仅询问物品数量、分布，无任何修改物品存放位置/消耗/新增的动作动词
+    """
+    QUERY_TOTAL_KEYWORDS = [
+        "一共有", "总共有", "全部有多少", "全部几个", "总存量",
+        "清点库存", "清点一下", "统计库存", "统计一下",
+        "合计多少", "库存总数", "一共多少", "总共多少",
+    ]
+    for kw in QUERY_TOTAL_KEYWORDS:
+        if kw in text:
+            return True
+
+    # "清点/统计/盘点" + "库存/物品" 组合
+    if re.search(r"(清点|统计|盘点)", text) and re.search(r"(库存|物品|全部|所有)", text):
+        return True
+
+    return False
+
+
+def grouped_inventory_summary(items: list) -> str:
+    """按存放空间+位置分组汇总库存统计文案。"""
+    from collections import defaultdict
+
+    groups: dict[tuple[str, str], list] = defaultdict(list)
+    for item in items:
+        key = (item.spaceName or "未分类", item.location or "默认层架")
+        groups[key].append(item)
+
+    sorted_keys = sorted(groups.keys(), key=lambda k: (k[0], k[1]))
+
+    lines = ["【松鼠库存统计汇总】"]
+    total_count = 0
+    total_unit = "个"
+
+    for idx, (space, loc) in enumerate(sorted_keys, 1):
+        group_items = groups[(space, loc)]
+        group_items.sort(key=lambda it: it.title)
+
+        item_parts = []
+        group_subtotal = 0
+        unit = "个"
+
+        for item in group_items:
+            count = item.count or 1
+            group_subtotal += count
+            unit = item.unit or "个"
+            item_parts.append(f"{item.title}×{count}{unit}")
+
+        total_count += group_subtotal
+        total_unit = unit
+
+        items_str = "、".join(item_parts)
+        lines.append(f"{idx}. {space}/{loc}：{items_str} → 小计{group_subtotal}{unit}")
+
+    lines.append(f"✅ 全部库存总存量：{total_count}{total_unit}")
+    lines.append("")
+    lines.append("如需调整物品存放位置/消耗，可以告诉我目标操作。")
+
+    return "\n".join(lines)
 
 
 def parse_multi_selection(text: str, max_index: int) -> list[int] | Literal["all", "cancel"] | None:
@@ -361,7 +420,7 @@ class IntentExtractionResult(BaseModel):
 
     intent: str = Field(
         description="用户意图，只能取以下枚举值：add, consume, remove, update_location, "
-        "update_expiry, quantity_query, location_query, expiry_query, "
+        "update_expiry, quantity_query, query_total, location_query, expiry_query, "
         "idle_query, recipe, search_query, chat"
     )
     item_name: str = Field(default="", description="物品名称，提取不到则为空字符串")
@@ -546,6 +605,10 @@ def build_chat_result_by_rules(text: str) -> ChatResult:
     if any(word in text for word in ["在哪", "哪里", "放哪", "位置"]):
         return ChatResult(intent="location_query", replyText="正在查询物品位置。")
 
+    # === 库存总量查询（最高优先级，在 quantity_query 之前） ===
+    if is_query_total(text):
+        return ChatResult(intent="query_total", replyText="正在统计全部库存。")
+
     if any(word in text for word in ["还剩", "还有几个", "还有多少", "有多少", "几个", "多少"]):
         # 数量查询：提取物品名称，按名称精准匹配
         search_terms = re.sub(r"[我你要看查还有剩几个多少在哪哪里]", "", text).strip()
@@ -578,6 +641,7 @@ _INTENT_REPLY_MAP: dict[str, str] = {
     "update_location": "我会尝试更新该物品的位置。",
     "update_expiry": "我会尝试更新该物品的保质期。",
     "quantity_query": "正在查询物品数量。",
+    "query_total": "正在统计全部库存。",
     "location_query": "正在查询物品位置。",
     "expiry_query": "正在查询临期物品。",
     "idle_query": "正在查询可能长期闲置的物品。",

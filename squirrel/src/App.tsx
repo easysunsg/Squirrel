@@ -53,6 +53,13 @@ type ServerInventoryItem = {
   tags?: string[];
   remark?: string | null;
   icon?: string;
+  isOpened?: boolean;
+  openedDate?: string | null;
+  paoDays?: number;
+  finalExpiryDate?: string | null;
+  belongsToSlotId?: string | null;
+  skuId?: string | null;
+  instanceId?: string | null;
 };
 
 type ServerStatePayload = {
@@ -421,6 +428,8 @@ export default function App() {
           personality: settings.squirrelPersonality,
           habits: settings.dietaryHabits,
           locations: settings.selectedLocations,
+          userId: "default_user",
+          userName: "主人",
         }),
       });
 
@@ -428,7 +437,56 @@ export default function App() {
         throw new Error(`Failed to send chat message: ${response.status}`);
       }
 
-      const data = (await response.json()) as ChatApiResponse;
+      // Parse SSE stream from response body
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("Response body is not readable");
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let data: ChatApiResponse | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE events — format: "event: xxx\ndata: {...}\n\n"
+        const blocks = buffer.split("\n\n");
+        // Keep the last incomplete block in the buffer
+        buffer = blocks.pop() || "";
+
+        for (const block of blocks) {
+          const lines = block.split("\n");
+          let eventType = "";
+          let eventData = "";
+
+          for (const line of lines) {
+            if (line.startsWith("event: ")) {
+              eventType = line.slice(7).trim();
+            } else if (line.startsWith("data: ")) {
+              eventData = line.slice(6);
+            }
+          }
+
+          if (eventType === "error" && eventData) {
+            const errorPayload = JSON.parse(eventData);
+            throw new Error(errorPayload.detail || "Chat SSE error");
+          }
+
+          if (eventType === "result" && eventData) {
+            data = JSON.parse(eventData) as ChatApiResponse;
+          }
+        }
+      }
+
+      // Process the final result
+      if (!data) {
+        throw new Error("Chat response did not include a result event");
+      }
+
       if (Array.isArray(data.items)) {
         const serverItems = normalizeServerItems(data.items);
         saveItemsToStorage(serverItems);

@@ -4,6 +4,7 @@ from pydantic import AliasChoices, BaseModel, Field
 
 ItemTag = Literal["告急", "较低", "充足", "过期预警"]
 InventoryCategory = Literal["food", "medicine", "electronics", "cosmetics", "book", "other"]
+NodeType = Literal["Zone", "Fixture", "Container", "Slot"]
 ChatIntent = Literal[
     "add",
     "consume",
@@ -14,6 +15,7 @@ ChatIntent = Literal[
     "expiry_query",
     "location_query",
     "quantity_query",
+    "query_total",
     "search_query",
     "idle_query",
     "recipe",
@@ -33,6 +35,58 @@ class Space(BaseModel):
     badgeColor: str = "bg-secondary-container"
 
 
+class SKU(BaseModel):
+    """产品定义——描述一种物品的固定属性。"""
+    sku_id: str = ""
+    title: str = "无名物品"
+    category: InventoryCategory = "other"
+    unit: str = "个"
+    remind_days_before: int = Field(default=5, ge=0)
+    tags: list[str] = Field(default_factory=list)
+    icon: str = "package_2"
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class ItemInstance(BaseModel):
+    """实物实例——描述一个具体批次/单件的动态状态。"""
+    instance_id: str = ""
+    sku_id: str = ""
+    space_id: str = "kitchen"
+    location: str = "默认层架"
+    quantity: int = Field(default=1, ge=0)
+    remaining_pct: int = Field(default=100, ge=0, le=100)
+    buy_date: str | None = None
+    expire_date: str | None = None
+    is_opened: bool = False
+    opened_date: str | None = None
+    pao_days: int = Field(default=0, ge=0)
+    final_expiry_date: str | None = None
+    belongs_to_slot_id: str | None = None
+    last_modified_by: str = "system"
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class SpatialNode(BaseModel):
+    """空间节点——描述存放位置（区域/固定装置/容器/槽位）。"""
+    node_id: str = ""
+    node_type: NodeType = "Slot"
+    parent_id: str | None = None
+    name: str = ""
+    aliases: list[str] = Field(default_factory=list)
+    created_at: str = ""
+
+
+class ConflictWarning(BaseModel):
+    """多租户冲突预警。"""
+    other_user: str = ""
+    sku_title: str = ""
+    action_type: str = ""
+    time_ago_hours: float = 0.0
+    warning_text: str = ""
+
+
 class Item(BaseModel):
     id: str | None = None
     title: str = "无名物品"
@@ -50,6 +104,14 @@ class Item(BaseModel):
     tags: list[str] = Field(default_factory=list)
     remark: str | None = None
     icon: str = "package_2"
+    # === 新字段（来自 SKU+Instance 模型，可选向后兼容） ===
+    isOpened: bool = False
+    openedDate: str | None = None
+    paoDays: int = Field(default=0, ge=0)
+    finalExpiryDate: str | None = None
+    belongsToSlotId: str | None = None
+    skuId: str | None = None
+    instanceId: str | None = None
 
 
 class Message(BaseModel):
@@ -87,6 +149,8 @@ class ChatResult(BaseModel):
     # === 多选支持（新增） ===
     confirmedItemIds: list[str] = Field(default_factory=list)  # 用户确认选择的多个物品 ID（多选）
     confirmedDeductCounts: dict[str, int] = Field(default_factory=dict)  # 每个物品的扣减数量 {item_id: count}
+    # === 冲突检测 ===
+    conflictCheckSkus: list[str] = Field(default_factory=list)  # 需要做冲突检测的 SKU 名称列表
 
 
 class ConfirmRequest(BaseModel):
@@ -151,6 +215,9 @@ class ChatRequest(BaseModel):
     personality: str | None = None
     habits: list[str] = Field(default_factory=list)
     locations: list[str] = Field(default_factory=list)
+    # === 多租户身份 ===
+    userId: str = "default_user"
+    userName: str = "主人"
 
 
 class RecipeRequest(BaseModel):
