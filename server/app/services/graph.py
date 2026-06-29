@@ -373,6 +373,10 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
                         extracted["target"] = target
                         extracted["patch"] = {"expireDate": days_from_now(expire_days)}
 
+                elif intent in ("quantity_query", "location_query", "search_query", "recipe"):
+                    # 将大模型识别到的 target 或 keyword 保留下来
+                    extracted["target"] = entities.get("target") or entities.get("keyword")
+
                 logger.info("LLM intent classification succeeded intent=%s", intent)
                 return {
                     "intent": intent,
@@ -694,7 +698,7 @@ def mutation_executor_node(state: ExtendedGraphState) -> Dict[str, Any]:
 
     new_logs: List[Dict[str, Any]] = []
     reply_text = state.get("reply_text", "")
-
+    pending_add_items: List[Dict[str, Any]] = []  # 用于返回给 adapter 层
     # --- 处理来自 confirm_handler 的单选 ID ---
     if confirmed_item_id and confirmed_patch:
         # update 操作：通过 patch 直接修改
@@ -776,9 +780,9 @@ def mutation_executor_node(state: ExtendedGraphState) -> Dict[str, Any]:
             })
         if not reply_text:
             reply_text = f"登记成功！已帮您将物品录入系统。"
-        # Mark pending_add items for adapter layer
-        state["pending_add_items"] = items_data
-        state["inventory"] = inventory  # preserve
+
+        # 🚨 修复：不直接修改 state，而是将增量数据放入返回字典，让 LangGraph 统一调度更新
+        pending_add_items = items_data
 
     elif pending_op.type in ("consume", "remove"):
         deduct_count = pending_op.patch.get("deductCount", 1.0)
@@ -812,6 +816,7 @@ def mutation_executor_node(state: ExtendedGraphState) -> Dict[str, Any]:
         "pending_operation": None,
         "pending_item_selection": [],
         "reply_text": reply_text,
+        "pending_add_items": pending_add_items,
     }
 
 
@@ -862,12 +867,24 @@ def query_handler_node(state: ExtendedGraphState) -> Dict[str, Any]:
 
     # ------ quantity_query ------
     if intent == "quantity_query":
-        text = state.get("raw_text_input", "")
-        from app.services.parser import extract_search_keyword
-        query = extract_search_keyword(text)
+        # 1. 优先从上游大模型提取的实体里拿
+        query = entities.get("target")
+
+        # 2. 如果上游没拿到，尝试从跨轮上下文记忆里继承
+        if not query and current_context:
+            query = current_context.get("title")
+
+        # 3. 如果还是没有，才用正则 parser 兜底
+        if not query:
+            text = state.get("raw_text_input", "")
+            from app.services.parser import extract_search_keyword
+            query = extract_search_keyword(text)
+
+        logger.info("[Query Handler] 数量查询关键词锁定为: %s", query)
+
         candidates = _match_items_3tier(inventory, query)
         if not candidates:
-            return {"reply_text": f"没有找到「{query}」相关信息。"}
+            return {"reply_text": f"没有找到「{query or '指定物品'}」相关信息。"}
         item = candidates[0]
         return {
             "reply_text": f"「{item.title}」还剩 {item.count}{item.unit}，在 {item.spaceName}{item.location}。",
