@@ -46,6 +46,26 @@ def summarize_titles(items: list[Item], limit: int = 6) -> str:
     return "、".join(item.title for item in items[:limit])
 
 
+def _is_pronoun_or_garbage_target(target: str) -> bool:
+    """检测 LLM 提取的 target 是否为代词或垃圾短语，需回退到上下文。"""
+    import re as re_mod
+    pronouns = {"这个", "那个", "这些", "那些", "它", "它们", "这东西", "那东西",
+                "这些东西", "那些东西", "这", "那", "该物品", "刚才说的", "上回说的"}
+    if target in pronouns:
+        return True
+    # 以常见中文代词开头的短语 → 也是指代
+    if any(target.startswith(p) for p in ("这个", "那个", "这些", "那些", "它", "它们", "这东西", "那东西", "该物品")):
+        return True
+    # 包含"处理过的/已处理的/吃过的/用过的"等说明性后缀 → 用户是在解释原因
+    if re_mod.search(r"已?[处理吃用]\s*过\s*的", target):
+        return True
+    # 纯说明性短语 / 垃圾值——以动词/形容词开头且长度超过 3 个字
+    garbage_prefixes = ("已处理", "处理过", "吃过", "用过", "刚刚", "刚才", "那个", "已经")
+    if any(target.startswith(p) for p in garbage_prefixes) and len(target) > 3:
+        return True
+    return False
+
+
 def match_search_items(text: str, inventory: list[Item]) -> list[Item]:
     query = extract_search_keyword(text)
     results = vector_store.search(query, inventory)
@@ -333,7 +353,7 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
     if llm_service.enabled:
         try:
             inventory_summary = summarize_titles(inventory, limit=10) if inventory else "库存为空"
-            llm_result = llm_service.classify_intent(text, inventory_summary)
+            llm_result = llm_service.classify_intent(text, inventory_summary, current_context)
             intent = llm_result.get("intent", "unknown")
             entities = llm_result.get("entities", {})
 
@@ -349,6 +369,10 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
 
                 elif intent in ("consume", "remove"):
                     target = entities.get("target")
+                    # 代词/垃圾 target 检测：如果 LLM 提取的 target 是代词或"已处理过的物品"等
+                    # 无意义短语，忽略它，回退到 current_context
+                    if target and _is_pronoun_or_garbage_target(target):
+                        target = None
                     if not target and current_context and current_context.get("title"):
                         target = current_context["title"]
                     if not target and last_added and last_added.get("title"):
@@ -372,6 +396,8 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
 
                 elif intent == "update_location":
                     target = entities.get("target")
+                    if target and _is_pronoun_or_garbage_target(target):
+                        target = None
                     if not target and current_context and current_context.get("title"):
                         target = current_context["title"]
                     location = entities.get("location")
@@ -411,7 +437,15 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
     entities: Dict[str, Any] = {}
     if fallback.operations:
         op = fallback.operations[0]
-        entities["target"] = op.target
+        target = op.target
+        # 规则 fallback 中同样应用代词/垃圾 target 检测 → 回退到上下文
+        if target and _is_pronoun_or_garbage_target(target):
+            target = None
+        # 如果规则引擎没能提取到 target（如"丢了吧，这个已经处理过了"无法被正则匹配）
+        # 且存在跨轮上下文，用上下文补全
+        if not target and current_context and current_context.get("title"):
+            target = current_context["title"]
+        entities["target"] = target
         entities["items"] = [op.item.model_dump()] if op.item else []
         if op.patch:
             entities["patch"] = op.patch

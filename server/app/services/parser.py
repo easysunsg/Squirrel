@@ -564,7 +564,7 @@ def build_chat_result_by_rules(text: str) -> ChatResult:
             operations=[ChatOperation(type="add", item=item) for item in parsed],
         )
 
-    if any(word in text for word in ["扔掉", "扔了", "坏了", "清掉"]):
+    if any(word in text for word in ["扔掉", "扔了", "坏了", "清掉", "丢了吧", "丢了", "丢掉"]):
         target = extract_target_title(text)
         return ChatResult(
             intent="remove",

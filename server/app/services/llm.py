@@ -136,8 +136,15 @@ class LLMService:
         self,
         text: str,
         inventory_summary: str = "",
+        current_context: dict | None = None,
     ) -> dict:
         """Classify user intent with LLM.
+
+        Args:
+            text: User input text.
+            inventory_summary: Comma-separated item titles for context.
+            current_context: Current context item from multi-turn conversation
+                             (e.g. {"title": "全麦面包", "location": "厨房"}).
 
         Returns:
             {
@@ -184,9 +191,27 @@ class LLMService:
   }
 }"""
 
+        # 构建上下文信息（含跨轮代词消解）
+        context_parts = []
+        if inventory_summary:
+            context_parts.append(f"当前库存摘要：{inventory_summary}")
+        if current_context and current_context.get("title"):
+            ctx_title = current_context["title"]
+            ctx_loc = current_context.get("location", "")
+            ctx_space = current_context.get("spaceName", "")
+            ctx_info = f"上一轮提到的物品：{ctx_title}"
+            if ctx_space:
+                ctx_info += f"（位于{ctx_space}/{ctx_loc}）"
+            elif ctx_loc:
+                ctx_info += f"（位于{ctx_loc}）"
+            context_parts.append(ctx_info)
+            context_parts.append("注意：如果用户使用了「这个」「那个」「它」「这东西」「这」等代词，target 应填上上文物品的名称「{ctx_title}」")
+
+        context_str = "\n".join(context_parts) if context_parts else "无"
+
         user_prompt = f"""用户输入：{text}
 
-当前库存摘要：{inventory_summary or "无"}
+{context_str}
 
 请分析意图并提取实体。"""
 
