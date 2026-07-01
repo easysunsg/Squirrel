@@ -216,14 +216,30 @@ def multimodal_identity_router_node(state: ExtendedGraphState) -> Dict[str, Any]
     state_updates: Dict[str, Any] = {}
 
     # 强中断机制：pending 状态下用户输入 escape 词
-    if current_mode == "pending_selection" and raw_text in _ESCAPE_WORDS:
-        logger.info("[Input Router] 检测到强中断，重置为 normal 模式")
-        return {
-            "interaction_mode": "normal",
-            "pending_item_selection": [],
-            "pending_operation": None,
-            "reply_text": f"好滴{user_name}，已经帮您取消了刚才的操作。咱们重新开始，您想处理点什么物资？",
-        }
+    if current_mode == "pending_selection":
+        # 用 parse_multi_selection 判断是否为有效的选择题回复
+        from app.services.parser import parse_multi_selection
+        pending_count = len(state.get("pending_item_selection", []))
+        parsed = parse_multi_selection(raw_text, pending_count)
+
+        # 包含式 escape 检测：兼容"算了，不要了"等带标点的变体
+        is_escape = any(ew in raw_text for ew in _ESCAPE_WORDS) or parsed == "cancel"
+        if is_escape:
+            logger.info("[Input Router] 检测到强中断，重置为 normal 模式")
+            return {
+                "interaction_mode": "normal",
+                "pending_item_selection": [],
+                "pending_operation": None,
+                "reply_text": f"好滴{user_name}，已经帮您取消了刚才的操作。咱们重新开始，您想处理点什么物资？",
+            }
+
+        # 非有效选择输入（如打招呼、闲聊）→ 自动重置 pending 状态
+        if parsed is None:
+            logger.info("[Input Router] 检测到非选择输入「%s」，自动清除待选状态，走正常意图识别", raw_text)
+            state_updates["interaction_mode"] = "normal"
+            state_updates["pending_item_selection"] = []
+            state_updates["pending_operation"] = None
+            # 不回显"已取消"，直接走意图分类
 
     # 补全 mutation_logs
     if "mutation_logs" not in state or state["mutation_logs"] is None:
@@ -238,6 +254,7 @@ def route_after_input(state: ExtendedGraphState) -> Literal["go_to_confirm_handl
     # escape 已触发，直接出图
     if reply_text and "已经帮您取消了刚才的操作" in reply_text:
         return "end_early"
+    # 通过 state_updates 重置了 pending → 走正常意图分类
     if state.get("interaction_mode") == "pending_selection":
         logger.info("[Input Router] 有事务挂起 -> 流向 Confirm Handler")
         return "go_to_confirm_handler"
@@ -438,7 +455,13 @@ def conflict_batch_resolver_node(state: ExtendedGraphState) -> Dict[str, Any]:
             return {"reply_text": "管家听到您想操作物资，但没听清具体的物品名字，能再说一遍吗？"}
 
     candidates = _match_items_3tier(inventory, target_name)
-    req_count = float(entities.get("patch", {}).get("deductCount", 1.0))
+    req_count = 1.0
+    patch_data = entities.get("patch") or {}
+    if "deductCount" in patch_data:
+        try:
+            req_count = float(patch_data["deductCount"])
+        except (ValueError, TypeError):
+            req_count = 1.0
 
     if intent in ("consume", "remove") and not candidates:
         return {
@@ -498,6 +521,8 @@ def conflict_batch_resolver_node(state: ExtendedGraphState) -> Dict[str, Any]:
         logger.info("[Resolver] FIFO 锁定单品: %s", target_item.id)
 
         return {
+            "interaction_mode": "pending_selection",
+            "pending_item_selection": [_build_candidate_entries([target_item])[0]],
             "pending_operation": pending_op,
             "current_context_item": ctx_item,
             "reply_text": f"找到「{target_item.title}」— {target_item.spaceName}/{target_item.location} ({target_item.count}{target_item.unit})，确认要操作吗？",
@@ -561,7 +586,8 @@ def confirm_subgraph_handler_node(state: ExtendedGraphState) -> Dict[str, Any]:
         }
 
     # 取消
-    if text in ("取消", "退出", "不选了", "算了"):
+    cancel_keywords = {"取消", "退出", "不选了", "算了", "不要了"}
+    if any(kw in text for kw in cancel_keywords):
         return {
             "interaction_mode": "normal",
             "pending_item_selection": [],
@@ -572,15 +598,44 @@ def confirm_subgraph_handler_node(state: ExtendedGraphState) -> Dict[str, Any]:
     # 全部选择
     if text in ("全部", "所有", "全选"):
         if not selection:
-            return {"reply_text": "没有可清除的物品。", "interaction_mode": "normal"}
-        # 生成 mutation_logs 式的全部清除
+            return {"reply_text": "没有可操作的物品。", "interaction_mode": "normal"}
         item_ids = [s.get("id") for s in selection if s.get("id")]
+
+        op_type = pending_op.type if pending_op else "remove"
+        patch = pending_op.patch if pending_op else {}
+
+        # 根据原意图分流，保留原有的 operation 语义
+        if op_type.startswith("update_"):
+            return {
+                "interaction_mode": "normal",
+                "pending_item_selection": [],
+                "pending_operation": None,
+                "confirmed_item_ids": item_ids,
+                "confirmed_patch": patch,
+                "reply_text": _build_multi_update_reply(selection, op_type, patch),
+            }
+        if op_type == "consume":
+            total_deduct = patch.get("deductCount")
+            allocation = _build_multi_consume_allocation(selection, total_deduct)
+            return {
+                "interaction_mode": "normal",
+                "pending_item_selection": [],
+                "pending_operation": PendingOperation(
+                    type="consume",
+                    target_sku_title=pending_op.target_sku_title if pending_op else "",
+                    patch={"deductCounts": allocation},
+                    source_batch_ids=item_ids,
+                ),
+                "confirmed_item_ids": item_ids,
+                "reply_text": _build_multi_consume_reply(selection, allocation),
+            }
+        # remove 默认
         return {
             "interaction_mode": "normal",
             "pending_item_selection": [],
             "pending_operation": None,
             "confirmed_item_ids": item_ids,
-            "reply_text": f"已清除所有匹配物品。",
+            "reply_text": _build_multi_remove_reply(selection),
         }
 
     # 解析序号
@@ -605,8 +660,8 @@ def confirm_subgraph_handler_node(state: ExtendedGraphState) -> Dict[str, Any]:
     selected_items = [selection[i] for i in valid_indices]
     op_type = pending_op.type if pending_op else "consume"
 
-    # --- 单选 ---
-    if len(valid_indices) == 1 and text.isdigit() and 1 <= int(text) <= len(selection):
+    # --- 单选（取消 text.isdigit() 限制，完全以 valid_indices 解析结果为准） ---
+    if len(valid_indices) == 1:
         sel = selected_items[0]
         item_id = sel.get("id")
         if op_type.startswith("update_"):
@@ -997,7 +1052,6 @@ def post_process_node(state: ExtendedGraphState) -> Dict[str, Any]:
     return {
         "reply_text": reply_text,
         "current_context_item": updated_context,
-        "mutation_logs": [],
     }
 
 
@@ -1077,7 +1131,7 @@ def build_squirrel_graph():
 
 def extended_to_old_dict(state: ExtendedGraphState, inventory: list[Item] | None = None) -> dict:
     """将新图输出适配为 routes.py 期望的旧格式（含 chat_result + db_operations）。"""
-    intent = state.get("intent", "chat")
+    intent = state.get("intent", "chat") or "chat"
     reply_text = state.get("reply_text", "")
     mutation_logs = state.get("mutation_logs", [])
     pending_op = state.get("pending_operation")

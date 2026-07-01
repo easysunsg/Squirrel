@@ -352,9 +352,17 @@ def _process_chat(request: ChatRequest) -> dict:
         # === pending 路径 ===
         if pending_id and pending_items is not None:
             chat_result.pendingId = pending_id
-            if chat_result.itemSuggestion:
+            if db_ops.get("pending_consume"):
+                # Consume selection — send as matches for frontend inline buttons
+                consume_ctx = db_ops["pending_consume"].get("context", {})
+                chat_result.itemSuggestion = {
+                    "pendingId": pending_id,
+                    "matches": list(pending_items),
+                    "consumeAll": consume_ctx.get("consumeAll", False),
+                }
+            elif chat_result.itemSuggestion:
                 chat_result.itemSuggestion["pendingId"] = pending_id
-            elif pending_items:
+            else:
                 chat_result.itemSuggestion = {
                     "pendingId": pending_id,
                     "items": [item.model_dump() for item in pending_items],
