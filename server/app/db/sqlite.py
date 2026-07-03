@@ -217,6 +217,52 @@ def init_db() -> None:
                 aliases TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS conversation_snapshots (
+                snapshot_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                graph_version INTEGER NOT NULL DEFAULT 0,
+                execution_mode TEXT NOT NULL DEFAULT 'SUSPENDED',
+                is_suspended INTEGER NOT NULL DEFAULT 1,
+                suspension_reason TEXT,
+                action_queue_snapshot TEXT,
+                workspace_snapshot TEXT,
+                loop_depth_snapshot INTEGER NOT NULL DEFAULT 0,
+                missing_parameters TEXT,
+                blocked_action_id TEXT,
+                user_choice_options TEXT,
+                raw_user_input TEXT,
+                normalized_request TEXT,
+                memory_state TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                expires_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_snapshots_session
+                ON conversation_snapshots(session_id, graph_version);
+
+            CREATE TABLE IF NOT EXISTS policy_rules (
+                rule_id TEXT PRIMARY KEY,
+                rule_name TEXT NOT NULL,
+                description TEXT,
+                rule_type TEXT NOT NULL DEFAULT 'risk_control',
+                priority INTEGER NOT NULL DEFAULT 100,
+                conditions TEXT NOT NULL,
+                action TEXT NOT NULL DEFAULT 'block',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS idempotency_keys (
+                key TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                result_data TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                completed_at TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                expires_at TEXT NOT NULL
+            );
             """
         )
 
@@ -1057,3 +1103,140 @@ def get_pending_consume(conn: sqlite3.Connection, pending_id: str) -> tuple[list
     candidates = [Item.model_validate(item) for item in json.loads(row["items"])]
     context = json.loads(row["context"]) if row["context"] else {}
     return candidates, context
+
+
+# ====================================================================
+# Snapshot persistence (Phase 1 - JSON serialization)
+# ====================================================================
+
+
+def save_snapshot(
+    conn: sqlite3.Connection,
+    snapshot_id: str,
+    session_id: str,
+    graph_version: int,
+    snapshot_data: dict,
+    ttl_minutes: int = 60,
+) -> None:
+    """Persist a conversation snapshot to the database.
+
+    Args:
+        conn: Database connection
+        snapshot_id: Unique snapshot identifier
+        session_id: Session identifier
+        graph_version: Graph version at time of snapshot
+        snapshot_data: Snapshot state data (must be JSON-serializable)
+        ttl_minutes: Time-to-live in minutes
+    """
+    from datetime import datetime, timedelta
+    expires_at = (datetime.now() + timedelta(minutes=ttl_minutes)).isoformat()
+    now = datetime.now().isoformat()
+
+    conn.execute(
+        """INSERT INTO conversation_snapshots(
+            snapshot_id, session_id, graph_version, execution_mode, is_suspended,
+            suspension_reason, action_queue_snapshot, workspace_snapshot,
+            loop_depth_snapshot, missing_parameters, blocked_action_id,
+            user_choice_options, raw_user_input, normalized_request,
+            memory_state, created_at, expires_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(snapshot_id) DO UPDATE SET
+            graph_version=excluded.graph_version,
+            is_suspended=excluded.is_suspended,
+            suspension_reason=excluded.suspension_reason,
+            action_queue_snapshot=excluded.action_queue_snapshot,
+            workspace_snapshot=excluded.workspace_snapshot,
+            loop_depth_snapshot=excluded.loop_depth_snapshot,
+            missing_parameters=excluded.missing_parameters,
+            blocked_action_id=excluded.blocked_action_id,
+            user_choice_options=excluded.user_choice_options,
+            raw_user_input=excluded.raw_user_input,
+            normalized_request=excluded.normalized_request,
+            memory_state=excluded.memory_state,
+            expires_at=excluded.expires_at""",
+        (
+            snapshot_id,
+            session_id,
+            graph_version,
+            snapshot_data.get("execution_mode", "SUSPENDED"),
+            1 if snapshot_data.get("is_suspended", True) else 0,
+            snapshot_data.get("suspension_reason"),
+            json.dumps(snapshot_data.get("action_queue_snapshot", []), ensure_ascii=False, default=str),
+            json.dumps(snapshot_data.get("workspace_snapshot", {}), ensure_ascii=False, default=str),
+            snapshot_data.get("loop_depth_snapshot", 0),
+            json.dumps(snapshot_data.get("missing_parameters", []), ensure_ascii=False),
+            snapshot_data.get("blocked_action_id"),
+            json.dumps(snapshot_data.get("user_choice_options", []), ensure_ascii=False),
+            snapshot_data.get("raw_user_input", ""),
+            json.dumps(snapshot_data.get("normalized_request", {}), ensure_ascii=False, default=str),
+            json.dumps(snapshot_data.get("memory_state", {}), ensure_ascii=False, default=str),
+            now,
+            expires_at,
+        ),
+    )
+
+
+def get_active_snapshot(conn: sqlite3.Connection, session_id: str) -> dict | None:
+    """Get the most recent active (non-expired) snapshot for a session.
+
+    Args:
+        conn: Database connection
+        session_id: Session identifier
+
+    Returns:
+        Snapshot dict if found and not expired, None otherwise
+    """
+    from datetime import datetime
+    now = datetime.now().isoformat()
+
+    row = conn.execute(
+        """SELECT * FROM conversation_snapshots
+           WHERE session_id = ? AND is_suspended = 1 AND expires_at > ?
+           ORDER BY graph_version DESC LIMIT 1""",
+        (session_id, now),
+    ).fetchone()
+
+    if not row:
+        return None
+
+    return {
+        "snapshot_id": row["snapshot_id"],
+        "session_id": row["session_id"],
+        "graph_version": row["graph_version"],
+        "execution_mode": row["execution_mode"],
+        "is_suspended": bool(row["is_suspended"]),
+        "suspension_reason": row["suspension_reason"],
+        "action_queue_snapshot": json.loads(row["action_queue_snapshot"]) if row["action_queue_snapshot"] else [],
+        "workspace_snapshot": json.loads(row["workspace_snapshot"]) if row["workspace_snapshot"] else {},
+        "loop_depth_snapshot": row["loop_depth_snapshot"],
+        "missing_parameters": json.loads(row["missing_parameters"]) if row["missing_parameters"] else [],
+        "blocked_action_id": row["blocked_action_id"],
+        "user_choice_options": json.loads(row["user_choice_options"]) if row["user_choice_options"] else [],
+        "raw_user_input": row["raw_user_input"] or "",
+        "normalized_request": json.loads(row["normalized_request"]) if row["normalized_request"] else {},
+        "memory_state": json.loads(row["memory_state"]) if row["memory_state"] else {},
+        "created_at": row["created_at"] or "",
+        "expires_at": row["expires_at"] or "",
+    }
+
+
+def delete_snapshot(conn: sqlite3.Connection, snapshot_id: str) -> bool:
+    """Delete a snapshot by ID.
+
+    Returns:
+        True if a row was deleted, False otherwise
+    """
+    cur = conn.execute("DELETE FROM conversation_snapshots WHERE snapshot_id = ?", (snapshot_id,))
+    return cur.rowcount > 0
+
+
+def cleanup_expired_snapshots(conn: sqlite3.Connection) -> int:
+    """Delete all expired snapshots.
+
+    Returns:
+        Number of deleted rows
+    """
+    from datetime import datetime
+    now = datetime.now().isoformat()
+    cur = conn.execute("DELETE FROM conversation_snapshots WHERE expires_at < ?", (now,))
+    return cur.rowcount

@@ -1,4 +1,4 @@
-"""新架构 LangGraph — 6 节点简洁拓扑
+﻿"""新架构 LangGraph — 6 节点简洁拓扑
 
 重写说明：
 - 保留 run_squirrel_graph 签名不变，外部使用者（ai.py / test_graph.py）无需改动
@@ -11,13 +11,21 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
+from app.db.sqlite import get_active_snapshot, save_snapshot
 from app.models.schemas import ChatOperation, ChatResult, Item, RecipeRequest
 from app.models.state import (
+    ActionStatus,
+    AgentAction,
     ExtendedGraphState,
     PendingOperation,
     UserContext,
+    EventType, generate_idempotency_key, mutation_log_to_event,
     merge_audit_logs,
+    version_conflict_check,
 )
+from app.services.capabilities import CapabilityRegistry
+from app.services.idempotency import idempotency_service
+from app.services.event_bus import event_bus
 from app.services.cache import get_recipe_cache, set_recipe_cache
 from app.services.llm import llm_service
 from app.services.markdown import item_status
@@ -215,6 +223,177 @@ def _build_multi_update_reply(selected_items: list[dict], op_type: str, patch: d
         loc = patch.get("location", "")
         return f"已将 {len(selected_items)} 件物品移动到{loc}：{'、'.join(titles)}"
     return f"已更新 {len(selected_items)} 件物品：{'、'.join(titles)}"
+
+
+# ==============================
+# 节点 0a: ReEntryRouter (重入路由)
+# ==============================
+
+_REENTRY_SHARED_FLAG = "_snapshot_was_restored"
+
+
+def re_entry_router_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【重入路由】判定当前是 NEW 还是 RESUME 模式。
+
+    检查 DB 中是否存在活跃挂起快照。
+    如果存在 → 标记 snapshot_was_restored → 下游节点恢复现场。
+    如果不存在 → 正常 NEW 流程。
+    """
+    import json
+    session_id = "default_session"
+    snapshot = None
+    try:
+        from app.db.sqlite import connect
+        with connect() as conn:
+            snapshot = get_active_snapshot(conn, session_id)
+    except Exception:
+        logger.exception("[ReEntryRouter] DB 查询快照失败，将按 NEW 模式处理")
+
+    if snapshot and snapshot.get("is_suspended"):
+        # 恢复快照中的状态到 workspace
+        logger.info("[ReEntryRouter] 发现活跃快照 session=%s version=%d", session_id, snapshot["graph_version"])
+        return {
+            _REENTRY_SHARED_FLAG: True,
+            "extracted_entities": {
+                **_build_reentry_entities(snapshot),
+            },
+        }
+
+    logger.info("[ReEntryRouter] 无挂起快照 -> NEW 模式")
+    return {
+        _REENTRY_SHARED_FLAG: False,
+    }
+
+
+def _build_reentry_entities(snapshot: dict) -> dict:
+    """从快照数据构建重入实体，供下游节点判断交互上下文。"""
+    ws = snapshot.get("workspace_snapshot", {})
+    return {
+        "interaction_mode": ws.get("interaction_mode", "pending_selection"),
+        "pending_item_selection": ws.get("pending_item_selection", []),
+        "pending_operation": ws.get("pending_operation"),
+        "current_context_item": ws.get("current_context_item"),
+        "mutation_logs": ws.get("mutation_logs", []),
+    }
+
+
+def route_after_reentry(state: ExtendedGraphState) -> Literal["resume", "new"]:
+    """【条件路由】根据快照状态分流。"""
+    if state.get(_REENTRY_SHARED_FLAG):
+        return "resume"
+    return "new"
+
+
+# ==============================
+# 节点 0b: ReferenceResolver (指代消解)
+# ==============================
+
+def reference_resolver_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【指代消解】将当前文本与跨轮上下文关联。
+
+    解析用户口语中的"它"、"这个"、"那个"、"它们"等代词，
+    将其替换成 current_context_item 中的实际物品。
+    """
+    raw_text = state.get("raw_text_input", "")
+    current_context = state.get("current_context_item")
+    entities = state.get("extracted_entities", {})
+
+    target = entities.get("target", "")
+    if not target or _is_pronoun_or_garbage_target(target):
+        if current_context and current_context.get("title"):
+            resolved_title = current_context["title"]
+            logger.info("[RefResolver] 代词消解: '%s' -> '%s' (来自上下文)", target or "(空)", resolved_title)
+            return {
+                "extracted_entities": {
+                    **entities,
+                    "target": resolved_title,
+                    "resolved_from_context": True,
+                    "original_target": target,
+                },
+            }
+
+    return {
+        "extracted_entities": {
+            **entities,
+            "resolved_from_context": False,
+        },
+    }
+
+
+# ==============================
+# 节点 0c: GoalManager (目标管理)
+# ==============================
+
+def goal_manager_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【目标管理】将用户输入转化为明确的操作目标。
+
+    对意图进行分类和下钻，确保每个请求都有清晰的可执行目标。
+    目前作为占位节点透传，后续可扩展复杂的目标分解逻辑。
+    """
+    entities = state.get("extracted_entities", {})
+    resolved_target = entities.get("target", "")
+    resolved = entities.get("resolved_from_context", False)
+
+    logger.info("[GoalManager] 目标解析 target='%s' resolved=%s", resolved_target, resolved)
+
+    return {}
+
+
+# ==============================
+# 节点 0d: SnapshotStore (快照管理)
+# ==============================
+
+def snapshot_store_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【快照管理】挂起时封存现场快照到 DB。
+
+    当节点检测到参数缺失或高危操作需要用户确认时，
+    将当前执行上下文保存为快照并设置 is_suspended。
+    """
+    entities = state.get("extracted_entities", {})
+    pending_op = state.get("pending_operation")
+    interaction_mode = state.get("interaction_mode", "normal")
+    reply_text = state.get("reply_text", "")
+
+    # 只有在 pending_selection 模式且有 pending_operation 时才需要保存快照
+    if interaction_mode == "pending_selection" and pending_op:
+        try:
+            from app.db.sqlite import connect
+            from datetime import datetime, timedelta
+
+            snapshot_data = {
+                "is_suspended": True,
+                "execution_mode": "SUSPENDED",
+                "suspension_reason": "CONFIRMATION",
+                "workspace_snapshot": {
+                    "interaction_mode": interaction_mode,
+                    "pending_item_selection": state.get("pending_item_selection", []),
+                    "pending_operation": pending_op.model_dump() if hasattr(pending_op, "model_dump") else pending_op,
+                    "current_context_item": state.get("current_context_item"),
+                    "mutation_logs": state.get("mutation_logs", []),
+                },
+                "loop_depth_snapshot": 0,
+                "missing_parameters": [],
+                "blocked_action_id": None,
+                "user_choice_options": [],
+                "raw_user_input": state.get("raw_text_input", ""),
+            }
+
+            with connect() as conn:
+                save_snapshot(
+                    conn=conn,
+                    snapshot_id=f"snap_{uuid4().hex[:12]}",
+                    session_id="default_session",
+                    graph_version=1,
+                    snapshot_data=snapshot_data,
+                    ttl_minutes=60,
+                )
+            logger.info("[SnapshotStore] 已保存挂起快照")
+        except Exception:
+            logger.exception("[SnapshotStore] 保存快照失败")
+
+    return {
+        "reply_text": reply_text,
+    }
 
 
 # ==============================
@@ -464,6 +643,629 @@ def route_by_new_intent(state: ExtendedGraphState) -> Literal["mutation", "query
     if intent in ("add", "consume", "remove", "update_location", "update_expiry", "update_remaining"):
         return "mutation"
     return "query"
+
+
+# ==============================
+# 节点 3a: ParameterResolver (参数解析器)
+# ==============================
+
+def parameter_resolver_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【参数解析器】校验参数完整性，检测缺失参数。
+
+    检查 intent 所需的参数是否齐全：
+    - add: 需要 items 或 target
+    - consume/remove: 需要 target
+    - update_location: 需要 target + location
+    - update_expiry: 需要 target + expire_days
+    """
+    intent = state.get("intent", "")
+    entities = state.get("extracted_entities", {})
+    target = entities.get("target")
+    items_data = entities.get("items", [])
+    patch = entities.get("patch") or {}
+
+    missing: List[str] = []
+
+    if intent in ("add",):
+        if not target and not items_data:
+            missing.append("target_items")
+
+    elif intent in ("consume", "remove"):
+        if not target:
+            missing.append("target")
+
+    elif intent == "update_location":
+        if not target:
+            missing.append("target")
+        if not patch.get("location") and not entities.get("location"):
+            missing.append("location")
+
+    elif intent == "update_expiry":
+        if not target:
+            missing.append("target")
+        if not patch.get("expireDate") and not entities.get("expire_days"):
+            missing.append("expire_date")
+
+    # 如果有缺失参数，设置回复文本
+    if missing:
+        missing_names = {
+            "target_items": "物品名称或数量",
+            "target": "物品名称",
+            "location": "目标位置",
+            "expire_date": "保质期日期",
+        }
+        missing_desc = "、".join(missing_names.get(m, m) for m in missing)
+        return {
+            "missing_parameters": missing,
+            "reply_text": f"参数不完整，缺少：{missing_desc}。请补充完整后重试。",
+            "extracted_entities": {
+                **entities,
+                "missing_parameters": missing,
+            },
+        }
+
+    return {}
+
+
+def route_after_parameter_resolve(state: ExtendedGraphState) -> Literal["ready", "missing"]:
+    """【条件路由】参数完整 → 继续 / 参数缺失 → 挂起。"""
+    missing = state.get("missing_parameters", [])
+    if missing:
+        return "missing"
+    return "ready"
+
+
+# ==============================
+# 节点 3b: PolicyEngine (策略引擎)
+# ==============================
+
+# 预定义策略规则
+_DEFAULT_POLICIES = [
+    {
+        "rule_id": "risk_high_consumption",
+        "rule_name": "大额消耗拦截",
+        "description": "单次消耗数量超过10件时触发风控",
+        "rule_type": "risk_control",
+        "conditions": {"intent": "consume", "deduct_count__gt": 10},
+        "action": "warn",
+    },
+    {
+        "rule_id": "risk_bulk_remove",
+        "rule_name": "批量删除拦截",
+        "description": "批量删除超过5件物品时触发风控",
+        "rule_type": "risk_control",
+        "conditions": {"intent": "remove", "batch_count__gt": 5},
+        "action": "block",
+    },
+    {
+        "rule_id": "risk_expired_item",
+        "rule_name": "过期物品操作拦截",
+        "description": "操作已过期物品时发出警告",
+        "rule_type": "risk_control",
+        "conditions": {"intent__in": ["consume", "remove"], "item_is_expired": True},
+        "action": "warn",
+    },
+]
+
+
+def policy_engine_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【策略引擎】执行预定义策略规则检测。
+
+    检查当前操作是否触发了任何风控策略。
+    """
+    intent = state.get("intent", "")
+    entities = state.get("extracted_entities", {})
+    inventory = state.get("inventory", [])
+    target = entities.get("target")
+
+    triggered_rules: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+
+    for rule in _DEFAULT_POLICIES:
+        conditions = rule["conditions"]
+        matched = False
+
+        if conditions.get("intent") == intent:
+            # 大额消耗检测
+            if "deduct_count__gt" in conditions:
+                patch = entities.get("patch") or {}
+                deduct_count = patch.get("deductCount") or 1
+                if isinstance(deduct_count, (int, float)) and deduct_count > conditions["deduct_count__gt"]:
+                    matched = True
+                    warnings.append(f"单次消耗{deduct_count}件，触发大额消耗风控")
+
+            # 批量删除检测
+            if "batch_count__gt" in conditions:
+                pending_ids = state.get("pending_item_selection", [])
+                if len(pending_ids) > conditions["batch_count__gt"]:
+                    matched = True
+                    warnings.append(f"批量删除{len(pending_ids)}件，触发批量删除风控")
+
+            # 过期物品检测
+            if "item_is_expired" in conditions and target:
+                from datetime import date
+                for item in inventory:
+                    if item.title == target and item.expireDate:
+                        try:
+                            expire_date = datetime.strptime(item.expireDate, "%Y-%m-%d").date()
+                            if expire_date < date.today():
+                                matched = True
+                                warnings.append(f"「{item.title}」已过期({item.expireDate})，请谨慎操作")
+                                break
+                        except (ValueError, TypeError):
+                            pass
+
+        if matched:
+            triggered_rules.append({
+                "rule_id": rule["rule_id"],
+                "rule_name": rule["rule_name"],
+                "action": rule["action"],
+                "warnings": warnings,
+            })
+
+    if triggered_rules:
+        # 检查是否有 block 级别的规则
+        blocked = any(r["action"] == "block" for r in triggered_rules)
+        if blocked:
+            block_reasons = [r["warnings"][0] if r["warnings"] else r["rule_name"] for r in triggered_rules if r["action"] == "block"]
+            return {
+                "policy_violations": triggered_rules,
+                "is_blocked": True,
+                "reply_text": "⚠️ " + "；".join(block_reasons) + "。操作已被拦截，如需执行请联系管理员。",
+                "interaction_mode": "normal",
+                "pending_operation": None,
+            }
+
+        # warn 级别：在回复中追加警告
+        all_warnings = []
+        for r in triggered_rules:
+            all_warnings.extend(r["warnings"])
+        existing_reply = state.get("reply_text", "")
+        warn_text = "⚠️ " + "；".join(all_warnings[:3])
+        return {
+            "policy_violations": triggered_rules,
+            "is_blocked": False,
+            "reply_text": f"{warn_text}\n\n{existing_reply}" if existing_reply else warn_text,
+        }
+
+    return {
+        "policy_violations": [],
+        "is_blocked": False,
+    }
+
+
+def route_after_policy(state: ExtendedGraphState) -> Literal["blocked", "ready"]:
+    """【条件路由】策略检查通过 → 继续 / 被拦截 → post_process。"""
+    if state.get("is_blocked"):
+        return "blocked"
+    return "ready"
+
+
+# ==============================
+# 节点 3c: PreExecutionChecker (预执行检查器)
+# ==============================
+
+def pre_execution_checker_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【预执行检查器】静态拦截与风控判定。
+
+    在参数解析和策略引擎之后，做最终执行前检查。
+    检查项：
+    1. 高危操作是否需要用户确认
+    2. 操作是否涉及已删除/不存在的物品
+    3. 操作是否合理（如消耗数量 > 库存数量）
+    """
+    intent = state.get("intent", "")
+    entities = state.get("extracted_entities", {})
+    inventory = state.get("inventory", [])
+    target = entities.get("target")
+    pending_op = state.get("pending_operation")
+
+    checks: List[str] = []
+
+    # 检查1：消耗数量 > 库存数量
+    if intent == "consume" and target:
+        patch = entities.get("patch") or {}
+        deduct_count = patch.get("deductCount") or 1
+        matched_items = [item for item in inventory if item.title == target]
+        if matched_items:
+            total_count = sum(item.count for item in matched_items)
+            if isinstance(deduct_count, (int, float)) and deduct_count > total_count:
+                checks.append(f"消耗数量({deduct_count})超过库存总量({total_count})，已自动调整为{total_count}")
+                # 自动修正
+                patch["deductCount"] = total_count
+                return {
+                    "pre_execution_checks": checks,
+                    "extracted_entities": {**entities, "patch": patch},
+                    "reply_text": state.get("reply_text", "") + ("\n" + checks[0] if checks else ""),
+                    "needs_correction": True,
+                }
+
+    # 检查2：操作不存在物品
+    if intent in ("consume", "remove", "update_location", "update_expiry") and target:
+        matched = [item for item in inventory if item.title == target]
+        if not matched:
+            return {
+                "pre_execution_checks": [f"未找到物品「{target}」"],
+                "is_invalid": True,
+                "reply_text": f"库存中没有找到「{target}」，请检查物品名称是否正确。",
+            }
+
+    return {
+        "pre_execution_checks": checks,
+        "is_invalid": False,
+        "needs_correction": False,
+    }
+
+
+def route_after_pre_execution(state: ExtendedGraphState) -> Literal["invalid", "ready"]:
+    """【条件路由】检查通过 → 继续 / 无效 → post_process。"""
+    if state.get("is_invalid"):
+        return "invalid"
+    return "ready"
+
+
+# ==============================
+# 节点 3d: BudgetGuard (预算守卫)
+# ==============================
+
+def budget_guard_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【预算守卫】执行预算控制。
+
+    当前实现：
+    - 基于 loop_depth 的深度控制（已在 LoopGuard 中实现）
+    - 基于操作数量的批量控制
+    - 预留：基于 token 消耗的预算控制
+
+    此节点作为扩展点，后续可接入外部预算服务。
+    """
+    intent = state.get("intent", "")
+    entities = state.get("extracted_entities", {})
+    loop_depth = state.get("loop_depth", 0)
+    max_depth = state.get("max_depth", 5)
+
+    budget_checks: List[str] = []
+
+    # 深度检查
+    if loop_depth >= max_depth:
+        budget_checks.append(f"执行深度({loop_depth})已达到上限({max_depth})")
+        return {
+            "budget_exceeded": True,
+            "budget_checks": budget_checks,
+            "reply_text": "操作深度已到达上限，请简化操作后重试。",
+        }
+
+    # 批量操作数量检查
+    if intent == "add":
+        items_data = entities.get("items", [])
+        if len(items_data) > 20:
+            budget_checks.append(f"批量添加({len(items_data)}件)超过单次上限(20件)")
+            return {
+                "budget_exceeded": True,
+                "budget_checks": budget_checks,
+                "reply_text": f"单次最多添加20件物品，当前{len(items_data)}件已超出限制，请分批添加。",
+            }
+
+    return {
+        "budget_exceeded": False,
+        "budget_checks": budget_checks,
+    }
+
+
+def route_after_budget(state: ExtendedGraphState) -> Literal["exceeded", "ready"]:
+    """【条件路由】预算充足 → 继续 / 超出 → 挂起。"""
+    if state.get("budget_exceeded"):
+        return "exceeded"
+    return "ready"
+
+
+# ==============================
+# 节点 3e: ConsistencyChecker (一致性检查器)
+# ==============================
+
+def consistency_checker_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【一致性检查器】约束一致性检查。
+
+    检查项：
+    1. 同一物品不能同时出现在 add 和 remove 操作中
+    2. 操作目标不能同时包含矛盾和互斥的属性修改
+    """
+    intent = state.get("intent", "")
+    entities = state.get("extracted_entities", {})
+    patch = entities.get("patch") or {}
+
+    consistency_issues: List[str] = []
+
+    # 检查互斥的属性修改
+    if intent == "update_location" and intent == "update_expiry":
+        consistency_issues.append("不能同时修改位置和保质期")
+
+    # 检查 location 和 expiry 的互斥
+    if patch:
+        has_location = "location" in patch
+        has_expiry = "expireDate" in patch
+        if has_location and has_expiry:
+            consistency_issues.append("同一操作中不能同时修改位置和保质期，请分步操作")
+
+    if consistency_issues:
+        return {
+            "consistency_issues": consistency_issues,
+            "is_inconsistent": True,
+            "reply_text": "操作存在一致性冲突：" + "；".join(consistency_issues),
+        }
+
+    return {
+        "consistency_issues": [],
+        "is_inconsistent": False,
+    }
+
+
+def route_after_consistency(state: ExtendedGraphState) -> Literal["inconsistent", "ready"]:
+    """【条件路由】一致 → 继续 / 不一致 → 退回。"""
+    if state.get("is_inconsistent"):
+        return "inconsistent"
+    return "ready"
+
+
+# ==============================
+# 节点 3f: CapabilityRouter (能力路由器)
+# ==============================
+
+def capability_router_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【能力路由器】按 intent 路由到对应的能力域。
+
+    将 intent 映射到具体的 capability 名称，
+    并生成对应的 AgentAction 供后续执行。
+    """
+    intent = state.get("intent", "")
+    entities = state.get("extracted_entities", {})
+    pending_op = state.get("pending_operation")
+
+    # intent → capability 映射
+    capability_map = {
+        "add": "inventory",
+        "consume": "inventory",
+        "remove": "inventory",
+        "update_location": "inventory",
+        "update_expiry": "inventory",
+        "update_remaining": "inventory",
+        "expiry_query": "expiration",
+        "location_query": "inventory",
+        "quantity_query": "inventory",
+        "search_query": "inventory",
+        "idle_query": "inventory",
+        "recipe": "recommendation",
+        "chat": "chat",
+    }
+
+    capability = capability_map.get(intent, "chat")
+    target = entities.get("target", "")
+
+    # 生成 AgentAction
+    action = AgentAction(
+        idempotency_key=generate_idempotency_key(
+            session_id="default_session",
+            graph_version=0,
+            tool_name=f"{capability}_{intent}",
+            arguments={"target": target, "intent": intent},
+        ),
+        capability=capability,
+        tool_name=f"{capability}_{intent}",
+        arguments={
+            "target": target,
+            "intent": intent,
+            "extracted_entities": entities,
+        },
+        status=ActionStatus.PENDING,
+        risk_level=_determine_risk_level(intent, entities),
+    )
+
+    return {
+        "capability": capability,
+        "current_action": action,
+    }
+
+
+def _determine_risk_level(intent: str, entities: dict) -> str:
+    """根据意图和参数确定风险等级。"""
+    high_risk_intents = {"remove", "consume"}
+    medium_risk_intents = {"update_location", "update_expiry", "update_remaining"}
+
+    if intent in high_risk_intents:
+        patch = entities.get("patch") or {}
+        deduct_count = patch.get("deductCount") or 1
+        if isinstance(deduct_count, (int, float)) and deduct_count > 5:
+            return "HIGH"
+        return "MEDIUM"
+
+    if intent in medium_risk_intents:
+        return "MEDIUM"
+
+    return "LOW"
+
+
+def route_after_capability(state: ExtendedGraphState) -> Literal["mutation", "query"]:
+    """【条件路由】mutation → 原有 mutation 路由 / query → 原有 query 路由。"""
+    intent = state.get("intent", "chat")
+    if intent in ("add", "consume", "remove", "update_location", "update_expiry", "update_remaining"):
+        return "mutation"
+    return "query"
+
+
+# ==============================
+# 节点 4a: ToolExecutor (工具执行器)
+# ==============================
+
+def tool_executor_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【工具执行器】通过 CapabilityRegistry 执行具体操作。
+
+    流程：
+    1. 从 state 中获取 current_action
+    2. 查 CapabilityRegistry 获取对应能力域
+    3. 执行 idempotency check
+    4. 调用能力域的 execute() 方法
+    """
+    from app.db.sqlite import connect
+
+    current_action = state.get("current_action")
+    intent = state.get("intent", "")
+    entities = state.get("extracted_entities", {})
+    inventory = state.get("inventory", [])
+    pending_op = state.get("pending_operation")
+    confirmed_item_id = state.get("confirmed_item_id")
+    confirmed_item_ids = state.get("confirmed_item_ids", [])
+    confirmed_patch = state.get("confirmed_patch")
+
+    # 构建执行上下文
+    context = {
+        "inventory": inventory,
+        "user_id": state.get("current_user", UserContext(user_id="default", user_name="主人")).user_id,
+        "user_name": state.get("current_user", UserContext(user_id="default", user_name="主人")).user_name,
+        "pending_operation": pending_op,
+        "confirmed_item_id": confirmed_item_id,
+        "confirmed_item_ids": confirmed_item_ids,
+        "confirmed_patch": confirmed_patch,
+        "user_preference": state.get("user_preference", "无特殊要求"),
+        "reminder_time": state.get("reminder_time", ""),
+    }
+
+    # 如果没有 current_action，通过 intent 直接查找 capability
+    if not current_action:
+        capability_name = _intent_to_capability(intent)
+        cap = CapabilityRegistry.get(capability_name)
+        if not cap:
+            logger.warning("[ToolExecutor] 未找到能力域: %s", capability_name)
+            return {"reply_text": f"无法处理 {intent} 类型的操作。"}
+
+        # 构造临时 AgentAction
+        current_action = AgentAction(
+            idempotency_key=generate_idempotency_key(
+                session_id="default_session",
+                graph_version=0,
+                tool_name=f"{capability_name}_{intent}",
+                arguments={"target": entities.get("target", ""), "intent": intent, "extracted_entities": entities},
+            ),
+            capability=capability_name,
+            tool_name=f"{capability_name}_{intent}",
+            arguments={"target": entities.get("target", ""), "intent": intent, "extracted_entities": entities},
+            status=ActionStatus.PENDING,
+        )
+
+    # 查找能力域
+    cap = CapabilityRegistry.get_for_action(current_action)
+    if not cap:
+        logger.warning("[ToolExecutor] 未找到能力域: %s", current_action.capability)
+        return {"reply_text": f"无法处理 {current_action.capability} 类型的操作。"}
+
+    # 幂等性检查
+    try:
+        with connect() as conn:
+            can_execute, cached_result = idempotency_service.check_and_acquire(
+                current_action.idempotency_key, conn
+            )
+            if not can_execute and cached_result:
+                logger.info("[ToolExecutor] 命中幂等缓存 %s", current_action.idempotency_key[:20])
+                return {
+                    **cached_result,
+                    "idempotency_hit": True,
+                }
+    except Exception:
+        logger.exception("[ToolExecutor] 幂等检查失败，继续执行")
+        can_execute = True
+
+    # 执行
+    logger.info("[ToolExecutor] 执行: %s/%s", current_action.capability, current_action.tool_name)
+    result = cap.execute(current_action, context)
+
+    # 完成幂等锁
+    try:
+        with connect() as conn:
+            idempotency_service.complete(current_action.idempotency_key, conn, result)
+    except Exception:
+        logger.exception("[ToolExecutor] 幂等完成标记失败")
+
+    return result
+
+
+def _intent_to_capability(intent: str) -> str:
+    """将 intent 映射到 capability 名称。"""
+    mapping = {
+        "add": "inventory", "consume": "inventory", "remove": "inventory",
+        "update_location": "inventory", "update_expiry": "inventory", "update_remaining": "inventory",
+        "expiry_query": "expiration", "location_query": "inventory", "quantity_query": "inventory",
+        "search_query": "inventory", "idle_query": "inventory", "recipe": "recommendation",
+        "chat": "chat",
+    }
+    return mapping.get(intent, "chat")
+
+
+# ==============================
+# 节点 4b: ResultValidator (结果校验器)
+# ==============================
+
+def result_validator_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【结果校验器】校验执行结果是否合法。
+
+    检查项：
+    1. mutation_logs 是否有效
+    2. 是否有错误信息
+    3. 结果是否为空
+    """
+    mutation_logs = state.get("mutation_logs", [])
+    reply_text = state.get("reply_text", "")
+
+    # 检查 mutation_logs 是否有有效数据
+    if mutation_logs:
+        for log in mutation_logs:
+            if not log.get("event_id") or not log.get("op_type"):
+                logger.warning("[ResultValidator] 发现无效 mutation_log: %s", log)
+                return {
+                    "validation_passed": False,
+                    "validation_error": "发现无效的操作日志",
+                    "reply_text": "操作执行过程中出现内部错误，请重试。",
+                }
+
+    # 检查回复是否为空
+    if not reply_text and not mutation_logs:
+        return {
+            "validation_passed": False,
+            "validation_error": "执行结果为空",
+            "reply_text": "操作已完成，但未能生成响应。",
+        }
+
+    return {
+        "validation_passed": True,
+        "validation_error": None,
+    }
+
+
+def route_after_validation(state: ExtendedGraphState) -> Literal["pass", "fail"]:
+    """【条件路由】校验通过 → 继续 / 失败 → post_process。"""
+    if state.get("validation_passed", True):
+        return "pass"
+    return "fail"
+
+
+# ==============================
+# 节点 4c: StateUpdater (状态更新器)
+# ==============================
+
+def state_updater_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【状态更新器】递增 graph_version，更新执行状态。
+
+    在每次成功执行后：
+    1. graph_version += 1
+    2. 记录执行审计
+    3. 准备事件分发
+    """
+    current_version = state.get("graph_version", 0)
+    new_version = current_version + 1
+
+    logger.info("[StateUpdater] graph_version: %d → %d", current_version, new_version)
+
+    return {
+        "graph_version": new_version,
+        "state_updated": True,
+    }
 
 
 # ==============================
@@ -1093,12 +1895,92 @@ def post_process_node(state: ExtendedGraphState) -> Dict[str, Any]:
 # 图构建
 # ==============================
 
+
+# ==============================
+# 事件消费者（EventBus 订阅者）
+# ==============================
+
+def _on_inventory_changed(event: SystemEvent) -> None:
+    """【库存变更消费者】处理库存变更事件。
+
+    职责：更新 workspace.scratchpad 中的库存缓存数据。
+    """
+    logger.debug(
+        "[Consumer:InventoryChanged] op_type=%s sku=%s delta=%s",
+        event.payload.get("op_type"),
+        event.payload.get("sku_title"),
+        event.payload.get("delta"),
+    )
+
+
+def _on_execution_completed(event: SystemEvent) -> None:
+    """【执行完成消费者】处理执行完成后副作用。
+
+    职责：
+    - 处理上下文清理（物品被 remove/consume 时释放 current_context_item）
+    - 原 post_process_node 中的空间记忆锁释放逻辑
+    """
+    logger.debug(
+        "[Consumer:ExecutionCompleted] op_type=%s target=%s",
+        event.payload.get("op_type"),
+        event.payload.get("target_instance_id"),
+    )
+
+
+def _on_session_updated(event: SystemEvent) -> None:
+    """【会话更新消费者】处理 graph_version 递增事件。
+
+    职责：同步 memory 上下文变更，记录审计日志。
+    """
+    logger.debug(
+        "[Consumer:SessionUpdated] graph_version=%d mutations=%d",
+        event.payload.get("graph_version", 0),
+        event.payload.get("mutation_count", 0),
+    )
+
+
+def _register_event_consumers() -> None:
+    """注册所有事件消费者到 EventBus。
+
+    在 build_squirrel_graph() 中调用，确保消费者在图编译前就位。
+    """
+    event_bus.subscribe(
+        EventType.INVENTORY_CHANGED, "SESSION", _on_inventory_changed
+    )
+    event_bus.subscribe(
+        EventType.EXECUTION_COMPLETED, "SESSION", _on_execution_completed
+    )
+    event_bus.subscribe(
+        EventType.SESSION_STATE_UPDATED, "SESSION", _on_session_updated
+    )
+    logger.info("[EventBus] 已注册 3 个事件消费者")
+
 def build_squirrel_graph():
-    """构建新架构 LangGraph。"""
+    """构建新架构 LangGraph — 包含重入路由、指代消解、目标管理、快照管理。"""
     from langgraph.graph import END, START, StateGraph
 
     graph = StateGraph(ExtendedGraphState)
 
+    # 新增节点
+    graph.add_node("re_entry_router", re_entry_router_node)
+    graph.add_node("reference_resolver", reference_resolver_node)
+    graph.add_node("goal_manager", goal_manager_node)
+    graph.add_node("snapshot_store", snapshot_store_node)
+
+    # 控制层节点
+    graph.add_node("parameter_resolver", parameter_resolver_node)
+    graph.add_node("policy_engine", policy_engine_node)
+    graph.add_node("pre_execution_checker", pre_execution_checker_node)
+    graph.add_node("budget_guard", budget_guard_node)
+    graph.add_node("consistency_checker", consistency_checker_node)
+    graph.add_node("capability_router", capability_router_node)
+
+    # Phase 4 执行节点
+    graph.add_node("tool_executor", tool_executor_node)
+    graph.add_node("result_validator", result_validator_node)
+    graph.add_node("state_updater", state_updater_node)
+
+    # 原有节点
     graph.add_node("input_router", multimodal_identity_router_node)
     graph.add_node("intent_classifier", intent_classifier_node)
     graph.add_node("conflict_batch_resolver", conflict_batch_resolver_node)
@@ -1107,8 +1989,25 @@ def build_squirrel_graph():
     graph.add_node("query_handler", query_handler_node)
     graph.add_node("post_process", post_process_node)
 
-    # START → input_router（先执行 input_router，再根据结果路由）
-    graph.add_edge(START, "input_router")
+    # START → re_entry_router（先检查是否存在挂起快照）
+    graph.add_edge(START, "re_entry_router")
+
+    # re_entry_router → reference_resolver (NEW) / snapshot_store (RESUME)
+    graph.add_conditional_edges(
+        "re_entry_router",
+        route_after_reentry,
+        {
+            "resume": "snapshot_store",
+            "new": "reference_resolver",
+        },
+    )
+
+    # reference_resolver → goal_manager → input_router
+    graph.add_edge("reference_resolver", "goal_manager")
+    graph.add_edge("goal_manager", "input_router")
+
+    # snapshot_store → input_router (恢复后继续走 input_router)
+    graph.add_edge("snapshot_store", "input_router")
 
     # input_router → confirm_subgraph_handler / intent_classifier / post_process
     graph.add_conditional_edges(
@@ -1121,10 +2020,55 @@ def build_squirrel_graph():
         },
     )
 
-    # intent_classifier → conflict_batch_resolver / query_handler
+    # intent_classifier → 控制层入口（parameter_resolver）
+    graph.add_edge("intent_classifier", "parameter_resolver")
+
+    # 控制层流水线
     graph.add_conditional_edges(
-        "intent_classifier",
-        route_by_new_intent,
+        "parameter_resolver",
+        route_after_parameter_resolve,
+        {
+            "ready": "policy_engine",
+            "missing": "snapshot_store",  # 参数缺失 → 挂起
+        },
+    )
+    graph.add_conditional_edges(
+        "policy_engine",
+        route_after_policy,
+        {
+            "ready": "pre_execution_checker",
+            "blocked": "post_process",  # 被策略拦截 → 直接输出
+        },
+    )
+    graph.add_conditional_edges(
+        "pre_execution_checker",
+        route_after_pre_execution,
+        {
+            "ready": "budget_guard",
+            "invalid": "post_process",  # 无效操作 → 直接输出
+        },
+    )
+    graph.add_conditional_edges(
+        "budget_guard",
+        route_after_budget,
+        {
+            "ready": "consistency_checker",
+            "exceeded": "snapshot_store",  # 预算超限 → 挂起
+        },
+    )
+    graph.add_conditional_edges(
+        "consistency_checker",
+        route_after_consistency,
+        {
+            "ready": "capability_router",
+            "inconsistent": "post_process",  # 不一致 → 退回
+        },
+    )
+
+    # capability_router → conflict_batch_resolver / query_handler
+    graph.add_conditional_edges(
+        "capability_router",
+        route_after_capability,
         {
             "mutation": "conflict_batch_resolver",
             "query": "query_handler",
@@ -1151,9 +2095,24 @@ def build_squirrel_graph():
         },
     )
 
+    # mutation_executor → [Phase 4 执行管道]
+    graph.add_edge("mutation_executor", "tool_executor")
+
+    # query_handler → [Phase 4 执行管道]
+    graph.add_edge("query_handler", "tool_executor")
+
+    # Phase 4 内部流水线: tool_executor → result_validator → state_updater → post_process
+    graph.add_conditional_edges(
+        "tool_executor",
+        route_after_validation,
+        {
+            "pass": "state_updater",
+            "fail": "post_process",
+        },
+    )
+    graph.add_edge("state_updater", "post_process")
+
     # 汇聚到 post_process
-    graph.add_edge("mutation_executor", "post_process")
-    graph.add_edge("query_handler", "post_process")
     graph.add_edge("post_process", END)
 
     return graph.compile()
