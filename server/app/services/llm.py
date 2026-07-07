@@ -1,8 +1,9 @@
 """LLM service for intelligent parsing and generation."""
 
 import json
+from typing import Any, Optional
+import httpx
 import logging
-from typing import Any
 
 from app.core.config import settings
 from app.models.schemas import RecipeRecommendResult
@@ -87,7 +88,12 @@ class LLMService:
         self.api_key = settings.ai_api_key
         self.base_url = settings.ai_base_url
         self.model = settings.ai_model
+        # 配置化超时
+        self.timeout = getattr(settings, "ai_timeout", 30.0)
         self.enabled = self.provider != "mock" and bool(self.api_key)
+
+        # 复用http客户端，长连接池
+        self._http_client = httpx.Client(timeout=self.timeout)
 
         if self.enabled:
             logger.info(
@@ -99,35 +105,53 @@ class LLMService:
         else:
             logger.info("LLM service disabled, using rule-based fallback")
 
-    def _call_openai_compatible(self, messages: list[dict], response_format: dict | None = None) -> str:
-        """Call OpenAI-compatible API."""
+    # 程序销毁时关闭连接池
+    def __del__(self):
+        self._http_client.close()
+
+    def _call_openai_compatible(self, messages: list[dict], response_format: Optional[dict] = None) -> str:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.1,
+        }
+
+        if response_format:
+            payload["response_format"] = response_format
+
         try:
-            import httpx
+            response = self._http_client.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
 
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            }
+            # 多层安全校验
+            choices = data.get("choices", [])
+            if not choices:
+                raise ValueError(f"LLM response empty choices, raw resp: {data}")
 
-            payload: dict[str, Any] = {
-                "model": self.model,
-                "messages": messages,
-                "temperature": 0.1,
-            }
+            first_msg = choices[0].get("message", {})
+            content = first_msg.get("content", "")
+            if content is None:
+                content = ""
 
-            if response_format:
-                payload["response_format"] = response_format
+            return content.strip()
 
-            with httpx.Client(timeout=30.0) as client:
-                response = client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                )
-                response.raise_for_status()
-                data = response.json()
-                content = data["choices"][0]["message"]["content"]
-                return content.strip()
+        except httpx.HTTPStatusError as e:
+            # 区分HTTP状态码异常
+            logger.error(f"LLM http status error code={e.response.status_code}")
+            raise
+        except httpx.TimeoutException:
+            logger.error("LLM api request timeout")
+            raise
         except Exception:
             logger.exception("LLM API call failed")
             raise
