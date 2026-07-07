@@ -241,6 +241,18 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_snapshots_session
                 ON conversation_snapshots(session_id, graph_version);
 
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                graph_version INTEGER NOT NULL DEFAULT 0,
+                node_name TEXT NOT NULL,
+                state_snapshot TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_checkpoints_session
+                ON checkpoints(session_id, graph_version);
+
             CREATE TABLE IF NOT EXISTS policy_rules (
                 rule_id TEXT PRIMARY KEY,
                 rule_name TEXT NOT NULL,
@@ -1239,4 +1251,115 @@ def cleanup_expired_snapshots(conn: sqlite3.Connection) -> int:
     from datetime import datetime
     now = datetime.now().isoformat()
     cur = conn.execute("DELETE FROM conversation_snapshots WHERE expires_at < ?", (now,))
+    return cur.rowcount
+
+
+# ====================================================================
+# Checkpoint persistence (Phase 6 - REPLAY support)
+# ====================================================================
+
+
+def save_checkpoint(
+    conn: sqlite3.Connection,
+    checkpoint_id: str,
+    session_id: str,
+    graph_version: int,
+    node_name: str,
+    state_snapshot: dict,
+) -> None:
+    """Persist an execution checkpoint.
+
+    Args:
+        conn: Database connection
+        checkpoint_id: Unique checkpoint identifier
+        session_id: Session identifier
+        graph_version: Graph version at checkpoint
+        node_name: Name of the node that created the checkpoint
+        state_snapshot: JSON-serializable state snapshot
+    """
+    conn.execute(
+        """INSERT OR REPLACE INTO checkpoints(
+            id, session_id, graph_version, node_name, state_snapshot
+        ) VALUES(?, ?, ?, ?, ?)""",
+        (
+            checkpoint_id,
+            session_id,
+            graph_version,
+            node_name,
+            json.dumps(state_snapshot, ensure_ascii=False, default=str),
+        ),
+    )
+
+
+def get_checkpoint(conn: sqlite3.Connection, checkpoint_id: str) -> dict | None:
+    """Retrieve a checkpoint by ID.
+
+    Returns:
+        Checkpoint dict or None if not found
+    """
+    cur = conn.execute(
+        "SELECT * FROM checkpoints WHERE id = ?", (checkpoint_id,)
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row[0],
+        "session_id": row[1],
+        "graph_version": row[2],
+        "node_name": row[3],
+        "state_snapshot": json.loads(row[4]),
+        "created_at": row[5],
+    }
+
+
+def list_checkpoints(
+    conn: sqlite3.Connection,
+    session_id: str,
+    limit: int = 20,
+) -> list[dict]:
+    """List checkpoints for a session, newest first.
+
+    Returns:
+        List of checkpoint dicts
+    """
+    cur = conn.execute(
+        """SELECT * FROM checkpoints
+         WHERE session_id = ?
+         ORDER BY graph_version DESC
+         LIMIT ?""",
+        (session_id, limit),
+    )
+    results = []
+    for row in cur.fetchall():
+        results.append({
+            "id": row[0],
+            "session_id": row[1],
+            "graph_version": row[2],
+            "node_name": row[3],
+            "state_snapshot": json.loads(row[4]),
+            "created_at": row[5],
+        })
+    return results
+
+
+def delete_checkpoint(conn: sqlite3.Connection, checkpoint_id: str) -> bool:
+    """Delete a checkpoint.
+
+    Returns:
+        True if a row was deleted, False otherwise
+    """
+    cur = conn.execute("DELETE FROM checkpoints WHERE id = ?", (checkpoint_id,))
+    return cur.rowcount > 0
+
+
+def cleanup_expired_checkpoints(conn: sqlite3.Connection, ttl_minutes: int = 1440) -> int:
+    """Delete checkpoints older than ttl_minutes.
+
+    Returns:
+        Number of deleted rows
+    """
+    from datetime import datetime, timedelta
+    cutoff = (datetime.now() - timedelta(minutes=ttl_minutes)).isoformat()
+    cur = conn.execute("DELETE FROM checkpoints WHERE created_at < ?", (cutoff,))
     return cur.rowcount

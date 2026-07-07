@@ -11,7 +11,7 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
-from app.db.sqlite import get_active_snapshot, save_snapshot
+from app.db.sqlite import get_active_snapshot, save_snapshot, save_checkpoint, get_checkpoint
 from app.models.schemas import ChatOperation, ChatResult, Item, RecipeRequest
 from app.models.state import (
     ActionStatus,
@@ -19,10 +19,11 @@ from app.models.state import (
     ExtendedGraphState,
     PendingOperation,
     UserContext,
-    EventType, generate_idempotency_key, mutation_log_to_event,
+    EventType, SystemEvent, generate_idempotency_key, mutation_log_to_event,
     merge_audit_logs,
     version_conflict_check,
 )
+from app.services.planner import plan_actions
 from app.services.capabilities import CapabilityRegistry
 from app.services.idempotency import idempotency_service
 from app.services.event_bus import event_bus
@@ -325,18 +326,14 @@ def reference_resolver_node(state: ExtendedGraphState) -> Dict[str, Any]:
 # ==============================
 
 def goal_manager_node(state: ExtendedGraphState) -> Dict[str, Any]:
-    """【目标管理】将用户输入转化为明确的操作目标。
-
-    对意图进行分类和下钻，确保每个请求都有清晰的可执行目标。
-    目前作为占位节点透传，后续可扩展复杂的目标分解逻辑。
-    """
     entities = state.get("extracted_entities", {})
     resolved_target = entities.get("target", "")
     resolved = entities.get("resolved_from_context", False)
-
-    logger.info("[GoalManager] 目标解析 target='%s' resolved=%s", resolved_target, resolved)
-
-    return {}
+    logger.info("[GoalManager] target='%s' resolved=%s", resolved_target, resolved)
+    return {
+        "_goal_resolved": True,
+        "_goal_target": resolved_target,
+    }
 
 
 # ==============================
@@ -1250,21 +1247,312 @@ def route_after_validation(state: ExtendedGraphState) -> Literal["pass", "fail"]
 # ==============================
 
 def state_updater_node(state: ExtendedGraphState) -> Dict[str, Any]:
-    """【状态更新器】递增 graph_version，更新执行状态。
+    """【状态更新器】递增 graph_version，发布事件。
 
     在每次成功执行后：
     1. graph_version += 1
-    2. 记录执行审计
-    3. 准备事件分发
+    2. 为每个 mutation_log 发布 INVENTORY_CHANGED 事件
+    3. 发布 EXECUTION_COMPLETED 事件（聚合元数据）
+    4. 发布 SESSION_STATE_UPDATED 事件（版本变更通知）
     """
     current_version = state.get("graph_version", 0)
     new_version = current_version + 1
+    mutation_logs = state.get("mutation_logs", [])
 
-    logger.info("[StateUpdater] graph_version: %d → %d", current_version, new_version)
+    # 5.5: 为每个 mutation_log 发布 INVENTORY_CHANGED 事件
+    for log in mutation_logs:
+        event = mutation_log_to_event(log, "state_updater")
+        event_bus.publish(event)
+
+    # 5.5: 发布 EXECUTION_COMPLETED 事件（含聚合元数据）
+    op_types = list({log.get("op_type", "") for log in mutation_logs})
+    event_bus.publish(SystemEvent(
+        event_type=EventType.EXECUTION_COMPLETED,
+        scope="SESSION",
+        source_node="state_updater",
+        payload={
+            "mutation_count": len(mutation_logs),
+            "intent": state.get("intent", ""),
+            "op_types": op_types,
+        },
+    ))
+
+    # 5.5: 发布 SESSION_STATE_UPDATED 事件（graph_version 递增）
+    event_bus.publish(SystemEvent(
+        event_type=EventType.SESSION_STATE_UPDATED,
+        scope="SESSION",
+        source_node="state_updater",
+        payload={
+            "graph_version": new_version,
+            "mutation_count": len(mutation_logs),
+        },
+    ))
+
+    logger.info("[StateUpdater] graph_version: %d → %d (mutation_logs=%d)",
+                current_version, new_version, len(mutation_logs))
 
     return {
         "graph_version": new_version,
         "state_updated": True,
+    }
+
+
+# ==============================
+# Phase 6 节点: Checkpoint (检查点)
+# ==============================
+
+
+def checkpoint_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【检查点】在成功执行后持久化状态快照。
+
+    在 state_updater 之后调用，保存当前执行状态到 checkpoints 表。
+    包含 mutation_logs 摘要、graph_version、intent 等关键状态。
+    """
+    graph_version = state.get("graph_version", 0)
+    mutation_logs = state.get("mutation_logs", [])
+    intent = state.get("intent", "")
+    reply_text = state.get("reply_text", "")
+
+    # 仅在 graph_version > 0 且有执行结果时保存检查点
+    if graph_version > 0:
+        try:
+            from app.db.sqlite import connect
+
+            checkpoint_id = f"ckpt_{uuid4().hex[:12]}"
+            snapshot = {
+                "intent": intent,
+                "graph_version": graph_version,
+                "mutation_log_count": len(mutation_logs),
+                "reply_text_preview": reply_text[:100],
+                "op_types": list({log.get("op_type", "") for log in mutation_logs}),
+                "interaction_mode": state.get("interaction_mode", "normal"),
+                "has_pending_operation": state.get("pending_operation") is not None,
+            }
+            with connect() as conn:
+                save_checkpoint(
+                    conn=conn,
+                    checkpoint_id=checkpoint_id,
+                    session_id="default_session",
+                    graph_version=graph_version,
+                    node_name="checkpoint_node",
+                    state_snapshot=snapshot,
+                )
+            logger.info(
+                "[Checkpoint] 已保存检查点 %s (version=%d logs=%d)",
+                checkpoint_id, graph_version, len(mutation_logs),
+            )
+            return {"_last_checkpoint_id": checkpoint_id}
+        except Exception:
+            logger.exception("[Checkpoint] 保存检查点失败")
+
+    return {}
+
+
+# ==============================
+# Phase 6 节点: TaskEvaluator (任务评估器)
+# ==============================
+
+
+# 评估结果字面量
+TASK_CONTINUE = "continue"
+TASK_DONE = "done"
+TASK_SUSPEND = "suspend"
+
+
+def task_evaluator_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【任务评估器】动态评估执行结果，决定下一步路由。
+
+    根据执行状态返回:
+    - CONTINUE: 有更多动作待执行 → 返回 Planner/重规划
+    - DONE: 所有执行完成 → 进入 ResponseGenerator
+    - SUSPEND: 需要用户确认 → 挂起
+
+    当前实现简单判定: 只要有 mutation_logs 就标记 DONE，
+    否则标记 SUSPEND（无实质变更时挂起）。
+    """
+    mutation_logs = state.get("mutation_logs", [])
+    interaction_mode = state.get("interaction_mode", "normal")
+    errors = state.get("errors", [])
+    is_blocked = state.get("is_blocked", False)
+
+    # 被策略拦截 → 对话已结束
+    if is_blocked:
+        return {"_task_result": TASK_DONE}
+
+    # 有错误且无有效日志 → 挂起
+    if errors and not mutation_logs:
+        logger.info("[TaskEvaluator] 执行有错误且无变更 -> SUSPEND")
+        return {"_task_result": TASK_SUSPEND}
+
+    # 有 mutation_logs → 执行成功
+    if mutation_logs:
+        logger.info(
+            "[TaskEvaluator] 执行完成 (%d logs) -> DONE",
+            len(mutation_logs),
+        )
+        return {"_task_result": TASK_DONE}
+
+    # 仍在 pending_selection 模式 → 等待用户确认
+    if interaction_mode == "pending_selection":
+        return {"_task_result": TASK_SUSPEND}
+
+    # 默认: 简单查询或无变更 → DONE
+    logger.info("[TaskEvaluator] 无变更 -> DONE")
+    return {"_task_result": TASK_DONE}
+
+
+def route_after_evaluator(state: ExtendedGraphState) -> Literal["continue", "done", "suspend"]:
+    """【条件路由】根据 TaskEvaluator 结果分流。"""
+    task_result = state.get("_task_result", TASK_DONE)
+    if task_result == TASK_CONTINUE:
+        return "continue"
+    if task_result == TASK_SUSPEND:
+        return "suspend"
+    return "done"
+
+
+# ==============================
+# Phase 7 节点: Planner (规划器)
+# ==============================
+
+
+def planner_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【规划器】将 Intent + Entities 分解为 AgentAction 队列。
+
+    调用 plan_actions() 生成动作列表，推入 workspace.action_queue。
+    """
+    intent = state.get("intent", "")
+    entities = state.get("extracted_entities", {})
+    graph_version = state.get("graph_version", 0)
+
+    actions = plan_actions(
+        intent=intent,
+        entities=entities,
+        session_id="default_session",
+        graph_version=graph_version,
+    )
+
+    logger.info("[Planner] 生成了 %d 个动作: intent=%s", len(actions), intent)
+
+    return {
+        "current_action": actions[0] if actions else None,
+        "action_queue": actions,
+    }
+
+
+# ==============================
+# Phase 7 节点: ActionQueue (动作队列)
+# ==============================
+
+
+def action_queue_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【动作队列】从 FIFO 队列取出下一个 AgentAction。
+
+    如果队列为空，标记 _queue_empty 以路由到 post_process。
+    """
+    action_queue = state.get("action_queue", [])
+    current_action = state.get("current_action")
+
+    # 如果已有 current_action 且未执行完成，保持
+    if current_action:
+        return {"_queue_empty": False}
+
+    if not action_queue:
+        logger.info("[ActionQueue] 队列为空")
+        return {"_queue_empty": True, "current_action": None}
+
+    # FIFO: 取出第一个
+    next_action = action_queue[0]
+    remaining = action_queue[1:]
+
+    logger.info(
+        "[ActionQueue] 出队: %s/%s (剩余 %d 个)",
+        next_action.capability, next_action.tool_name, len(remaining),
+    )
+
+    return {
+        "current_action": next_action,
+        "action_queue": remaining,
+        "_queue_empty": False,
+    }
+
+
+def route_after_queue(state: ExtendedGraphState) -> Literal["has_action", "empty"]:
+    """【条件路由】队列有动作 → 继续执行 / 队列为空 → 结束。"""
+    if state.get("_queue_empty"):
+        return "empty"
+    return "has_action"
+
+
+# ==============================
+# Phase 7 节点: LoopGuard (循环守卫)
+# ==============================
+
+
+def loop_guard_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【循环守卫】检查执行深度，防止无限循环。
+
+    从 budget_guard_node 中提取的深度检查逻辑。
+    如果 loop_depth >= max_depth，标记熔断。
+    """
+    loop_depth = state.get("loop_depth", 0)
+    max_depth = state.get("max_depth", 5)
+
+    if loop_depth >= max_depth:
+        logger.warning("[LoopGuard] 深度 %d 已达上限 %d -> 熔断", loop_depth, max_depth)
+        return {
+            "loop_exceeded": True,
+            "reply_text": f"操作深度已到达上限({max_depth})，请简化操作后重试。",
+        }
+
+    # 递增深度
+    return {
+        "loop_exceeded": False,
+        "loop_depth": loop_depth + 1,
+    }
+
+
+def route_after_loop_guard(state: ExtendedGraphState) -> Literal["continue", "halt"]:
+    """【条件路由】深度正常 → 继续 / 超限 → 熔断。"""
+    if state.get("loop_exceeded"):
+        return "halt"
+    return "continue"
+
+
+# ==============================
+# Phase 8 节点: ResponseGenerator (响应生成器)
+# ==============================
+
+
+def response_generator_node(state: ExtendedGraphState) -> Dict[str, Any]:
+    """【响应生成器】纯无状态渲染层，收口所有输出。
+
+    职责：
+    1. 从 state 中提取 reply_text 和上下文
+    2. 处理 current_context_item 释放逻辑（原 post_process 中的空间记忆锁）
+    3. 将最终回复写入 final_response 结构
+    """
+    accumulated_logs = state.get("mutation_logs", [])
+    current_context = state.get("current_context_item")
+    reply_text = state.get("reply_text", "收到，管家已为您处理完毕。")
+
+    # 上下文防御：如果当前聚焦物品被移除，释放空间记忆锁
+    updated_context = current_context
+    for log in accumulated_logs:
+        if log["op_type"] in ("remove", "consume") and current_context:
+            if log.get("target_instance_id") == current_context.get("id"):
+                logger.info("[ResponseGenerator] 释放已移除物品的空间记忆锁")
+                updated_context = None
+
+    return {
+        "reply_text": reply_text,
+        "current_context_item": updated_context,
+        "final_response": {
+            "reply_text": reply_text,
+            "intent": state.get("intent", ""),
+            "has_mutations": len(accumulated_logs) > 0,
+            "interaction_mode": state.get("interaction_mode", "normal"),
+        },
     }
 
 
@@ -1870,24 +2158,10 @@ def query_handler_node(state: ExtendedGraphState) -> Dict[str, Any]:
 # ==============================
 
 def post_process_node(state: ExtendedGraphState) -> Dict[str, Any]:
-    """【统一出口】收敛 mutation_logs、保持上下文、日志记录。"""
-    accumulated_logs = state.get("mutation_logs", [])
-    current_context = state.get("current_context_item")
-    reply_text = state.get("reply_text", "收到，管家已为您处理完毕。")
-
-    logger.info("[Post Process] 本次流转产生 mutation_logs: %d 条", len(accumulated_logs))
-
-    # 上下文防御：如果当前聚焦物品被移除，释放空间记忆锁
-    updated_context = current_context
-    for log in accumulated_logs:
-        if log["op_type"] in ("remove", "consume") and current_context:
-            if log.get("target_instance_id") == current_context.get("id"):
-                logger.info("[Post Process] 释放已移除物品的空间记忆锁")
-                updated_context = None
-
+    """【统一出口】轻量透传 — 已迁移到 response_generator_node。"""
     return {
-        "reply_text": reply_text,
-        "current_context_item": updated_context,
+        "reply_text": state.get("reply_text", "收到，管家已为您处理完毕。"),
+        "current_context_item": state.get("current_context_item"),
     }
 
 
@@ -1901,41 +2175,47 @@ def post_process_node(state: ExtendedGraphState) -> Dict[str, Any]:
 # ==============================
 
 def _on_inventory_changed(event: SystemEvent) -> None:
-    """【库存变更消费者】处理库存变更事件。
+    """【库存变更消费者】记录库存变更审计日志。
 
-    职责：更新 workspace.scratchpad 中的库存缓存数据。
+    职责：记录每次库存变更操作到审计日志。
+    不修改 graph state — 只执行日志记录副作用。
     """
-    logger.debug(
-        "[Consumer:InventoryChanged] op_type=%s sku=%s delta=%s",
-        event.payload.get("op_type"),
-        event.payload.get("sku_title"),
-        event.payload.get("delta"),
+    logger.info(
+        "[EventBus] 库存变更: %s %s x%s (target=%s)",
+        event.payload.get("op_type", "?"),
+        event.payload.get("sku_title", "?"),
+        event.payload.get("delta", 0),
+        event.payload.get("target_instance_id", "?"),
     )
 
 
 def _on_execution_completed(event: SystemEvent) -> None:
-    """【执行完成消费者】处理执行完成后副作用。
+    """【执行完成消费者】记录执行摘要。
 
-    职责：
-    - 处理上下文清理（物品被 remove/consume 时释放 current_context_item）
-    - 原 post_process_node 中的空间记忆锁释放逻辑
+    职责：记录本次图执行的变更摘要（mutation 数量、操作类型）。
+    原 post_process_node 中的 mutation_logs 日志已移至此。
+    不修改 graph state — 只执行日志记录副作用。
     """
-    logger.debug(
-        "[Consumer:ExecutionCompleted] op_type=%s target=%s",
-        event.payload.get("op_type"),
-        event.payload.get("target_instance_id"),
+    mutation_count = event.payload.get("mutation_count", 0)
+    op_types = event.payload.get("op_types", [])
+    intent = event.payload.get("intent", "")
+    logger.info(
+        "[EventBus] 执行完成: intent=%s mutation_count=%d op_types=%s",
+        intent, mutation_count, op_types,
     )
 
 
 def _on_session_updated(event: SystemEvent) -> None:
-    """【会话更新消费者】处理 graph_version 递增事件。
+    """【会话更新消费者】记录 graph_version 变更。
 
-    职责：同步 memory 上下文变更，记录审计日志。
+    职责：记录版本变更事件，为后续审计追踪提供依据。
+    不修改 graph state — 只执行日志记录副作用。
     """
-    logger.debug(
-        "[Consumer:SessionUpdated] graph_version=%d mutations=%d",
-        event.payload.get("graph_version", 0),
-        event.payload.get("mutation_count", 0),
+    gv = event.payload.get("graph_version", 0)
+    mc = event.payload.get("mutation_count", 0)
+    logger.info(
+        "[EventBus] Session version → %d (mutation_count=%d)",
+        gv, mc,
     )
 
 
@@ -1980,6 +2260,18 @@ def build_squirrel_graph():
     graph.add_node("result_validator", result_validator_node)
     graph.add_node("state_updater", state_updater_node)
 
+    # Phase 6 节点
+    graph.add_node("checkpoint_node", checkpoint_node)
+    graph.add_node("task_evaluator", task_evaluator_node)
+
+    # Phase 7 节点
+    graph.add_node("planner_node", planner_node)
+    graph.add_node("action_queue_node", action_queue_node)
+    graph.add_node("loop_guard_node", loop_guard_node)
+
+    # Phase 8 节点
+    graph.add_node("response_generator", response_generator_node)
+
     # 原有节点
     graph.add_node("input_router", multimodal_identity_router_node)
     graph.add_node("intent_classifier", intent_classifier_node)
@@ -2016,7 +2308,7 @@ def build_squirrel_graph():
         {
             "go_to_confirm_handler": "confirm_subgraph_handler",
             "go_to_intent_classifier": "intent_classifier",
-            "end_early": "post_process",
+            "end_early": "response_generator",
         },
     )
 
@@ -2037,7 +2329,7 @@ def build_squirrel_graph():
         route_after_policy,
         {
             "ready": "pre_execution_checker",
-            "blocked": "post_process",  # 被策略拦截 → 直接输出
+            "blocked": "response_generator",  # 被策略拦截 → 直接输出
         },
     )
     graph.add_conditional_edges(
@@ -2045,7 +2337,7 @@ def build_squirrel_graph():
         route_after_pre_execution,
         {
             "ready": "budget_guard",
-            "invalid": "post_process",  # 无效操作 → 直接输出
+            "invalid": "response_generator",  # 无效操作 → 直接输出
         },
     )
     graph.add_conditional_edges(
@@ -2061,17 +2353,31 @@ def build_squirrel_graph():
         route_after_consistency,
         {
             "ready": "capability_router",
-            "inconsistent": "post_process",  # 不一致 → 退回
+            "inconsistent": "response_generator",  # 不一致 → 退回
         },
     )
 
-    # capability_router → conflict_batch_resolver / query_handler
+    # capability_router → planner_node → action_queue_node → loop_guard_node
+    graph.add_edge("capability_router", "planner_node")
+    graph.add_edge("planner_node", "action_queue_node")
+
+    # loop_guard_node → tool_executor (继续) / post_process (熔断)
     graph.add_conditional_edges(
-        "capability_router",
-        route_after_capability,
+        "loop_guard_node",
+        route_after_loop_guard,
         {
-            "mutation": "conflict_batch_resolver",
-            "query": "query_handler",
+            "continue": "tool_executor",
+            "halt": "response_generator",
+        },
+    )
+
+    # action_queue_node → loop_guard_node (有动作) / post_process (空)
+    graph.add_conditional_edges(
+        "action_queue_node",
+        route_after_queue,
+        {
+            "has_action": "loop_guard_node",
+            "empty": "response_generator",
         },
     )
 
@@ -2081,7 +2387,7 @@ def build_squirrel_graph():
         route_after_resolver,
         {
             "execute": "mutation_executor",
-            "pending": "post_process",
+            "pending": "response_generator",
         },
     )
 
@@ -2091,7 +2397,7 @@ def build_squirrel_graph():
         route_after_confirm,
         {
             "success": "mutation_executor",
-            "cancel": "post_process",
+            "cancel": "response_generator",
         },
     )
 
@@ -2101,19 +2407,47 @@ def build_squirrel_graph():
     # query_handler → [Phase 4 执行管道]
     graph.add_edge("query_handler", "tool_executor")
 
-    # Phase 4 内部流水线: tool_executor → result_validator → state_updater → post_process
+    # confirm_subgraph_handler → mutation_executor (success) / post_process (cancel)
+    # 已有上面的条件边
+
+    # ==============================
+    # Phase 7 执行管道 (来自 planner_node/action_queue_node)
+    # ==============================
+    # tool_executor → result_validator → state_updater → checkpoint_node → task_evaluator
+    # task_evaluator → (done: post_process, continue: planner_node, suspend: snapshot_store)
+
+    # Phase 4 内部流水线: tool_executor → result_validator → state_updater
     graph.add_conditional_edges(
         "tool_executor",
         route_after_validation,
         {
             "pass": "state_updater",
-            "fail": "post_process",
+            "fail": "response_generator",
         },
     )
-    graph.add_edge("state_updater", "post_process")
+
+    # Phase 6: state_updater → checkpoint_node → task_evaluator
+    graph.add_edge("state_updater", "checkpoint_node")
+    graph.add_edge("checkpoint_node", "task_evaluator")
+
+    # task_evaluator → 分流
+    graph.add_conditional_edges(
+        "task_evaluator",
+        route_after_evaluator,
+        {
+            "continue": "planner_node",    # 重规划 → 继续执行
+            "done": "response_generator",         # 执行完成
+            "suspend": "snapshot_store",    # 挂起
+        },
+    )
 
     # 汇聚到 post_process
+    graph.add_edge("response_generator", "post_process")
     graph.add_edge("post_process", END)
+
+    # 5.6: 在图编译前注册事件消费者
+    event_bus.reset()  # 防止测试中重复订阅
+    _register_event_consumers()
 
     return graph.compile()
 
@@ -2228,6 +2562,57 @@ def extended_to_old_dict(state: ExtendedGraphState, inventory: list[Item] | None
 squirrel_graph = None  # lazy init
 
 
+def _run_replay_mode(
+    text: str,
+    inventory: list[Item],
+    current_user_id: str,
+    current_user_name: str,
+) -> dict:
+    """REPLAY 模式：加载检查点快照，跳过意图解析直接回放。
+
+    从检查点加载上次执行的状态快照，构建旧格式输出。
+    """
+    from app.services.replay import replay_engine
+
+    # 加载检查点
+    checkpoints = replay_engine.load_checkpoints(limit=1)
+    if not checkpoints:
+        logger.warning("[REPLAY] 没有找到检查点，返回空结果")
+        return {
+            "chat_result": ChatResult(intent="chat", replyText="没有找到可回放的执行记录。"),
+            "db_operations": {"upsert_items": [], "delete_ids": [], "pending_add": [], "pending_consume": {}},
+            "interaction_mode": "normal",
+            "pending_item_selection": [],
+            "pending_operation": None,
+            "last_added_item": None,
+            "current_context_item": None,
+            "recipe_recommend": None,
+        }
+
+    latest = checkpoints[0]
+    snapshot = latest.get("state_snapshot", {})
+    logger.info(
+        "[REPLAY] 回放检查点 version=%d intent=%s",
+        latest["graph_version"], snapshot.get("intent"),
+    )
+
+    # 构建旧格式输出
+    intent = snapshot.get("intent", "chat")
+    reply_text = snapshot.get("reply_text_preview", f"[回放] 版本 {latest['graph_version']}")
+    chat_result = ChatResult(intent=intent, replyText=reply_text)
+
+    return {
+        "chat_result": chat_result,
+        "db_operations": {"upsert_items": [], "delete_ids": [], "pending_add": [], "pending_consume": {}},
+        "interaction_mode": "normal",
+        "pending_item_selection": [],
+        "pending_operation": None,
+        "last_added_item": None,
+        "current_context_item": None,
+        "recipe_recommend": None,
+    }
+
+
 def run_squirrel_graph(
     text: str,
     inventory: list[Item] | None = None,
@@ -2240,6 +2625,7 @@ def run_squirrel_graph(
     reminder_time: str = "",
     current_user_id: str = "default_user",
     current_user_name: str = "主人",
+    execution_mode: str = "NEW",
 ) -> dict:
     """运行新图，返回旧格式 dict 保证兼容性。
 
@@ -2259,6 +2645,15 @@ def run_squirrel_graph(
             patch=pending_operation.get("patch", {}),
             consume_all=pending_operation.get("consumeAll", False),
             source_batch_ids=pending_operation.get("source_batch_ids", []),
+        )
+
+    # 6.5: REPLAY 模式 — 加载检查点快照覆盖初始状态
+    if execution_mode == "REPLAY":
+        return _run_replay_mode(
+            text=text,
+            inventory=inventory or [],
+            current_user_id=current_user_id,
+            current_user_name=current_user_name,
         )
 
     # 构建新状态

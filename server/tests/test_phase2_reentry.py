@@ -340,7 +340,8 @@ class TestGoalManager:
         }
         result = goal_manager_node(state)
         # GoalManager is currently a pass-through
-        assert result == {}
+        assert result["_goal_resolved"] is True
+        assert result["_goal_target"] == "牛奶"
 
 
 # ====================================================================

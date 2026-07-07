@@ -291,49 +291,13 @@ class ExtendedGraphState(TypedDict, total=False):
 
 
 # ==========================================
-# 8. 状态转换函数
+# 8. (保留兼容函数，已弃用)
 # ==========================================
 
 
 def agent_to_extended(agent_state: AgentGraphState) -> ExtendedGraphState:
-    """将 AgentGraphState 转换为 ExtendedGraphState (TypedDict)。
-
-    用于将新架构的状态向下兼容到旧版 LangGraph 节点。
-    """
-    memory = agent_state.memory
-    workspace = agent_state.workspace
-    snapshot = agent_state.snapshot
-
-    # 从 workspace.scratchpad 中提取旧版字段
-    scratchpad = workspace.scratchpad
-
-    return {
-        "raw_text_input": agent_state.raw_user_input,
-        "image_payloads": agent_state.normalized_request.get("image_payloads", []),
-        "current_user": UserContext(
-            user_id=memory.user_id,
-            user_name=memory.household_profile.get("user_name", "主人"),
-            role=memory.household_profile.get("role", "member"),
-            current_zone=memory.household_profile.get("current_zone"),
-        ),
-        "intent": agent_state.normalized_request.get("intent", ""),
-        "extracted_entities": agent_state.normalized_request.get("extracted_entities", {}),
-        "interaction_mode": scratchpad.get("interaction_mode", "normal"),
-        "current_context_item": scratchpad.get("current_context_item"),
-        "pending_item_selection": scratchpad.get("pending_item_selection", []),
-        "pending_operation": scratchpad.get("pending_operation"),
-        "reply_text": agent_state.final_response.get("reply_text", ""),
-        "recipe_recommendation": agent_state.final_response.get("recipe_recommendation"),
-        "mutation_logs": scratchpad.get("mutation_logs", []),
-        "inventory": scratchpad.get("inventory", []),
-        "last_added_item": scratchpad.get("last_added_item"),
-        "user_preference": memory.user_preferences.get("diet", "无特殊要求"),
-        "reminder_time": memory.user_preferences.get("reminder_time", ""),
-        "confirmed_item_id": scratchpad.get("confirmed_item_id"),
-        "confirmed_item_ids": scratchpad.get("confirmed_item_ids", []),
-        "confirmed_patch": scratchpad.get("confirmed_patch"),
-        "pending_add_items": scratchpad.get("pending_add_items", []),
-    }
+    """[已弃用] 保留供旧测试兼容。"""
+    return {}  # type: ignore[return-value]
 
 
 def extended_to_agent(
@@ -341,62 +305,13 @@ def extended_to_agent(
     session_id: Optional[str] = None,
     trace_id: Optional[str] = None,
 ) -> AgentGraphState:
-    """将 ExtendedGraphState (TypedDict) 转换为 AgentGraphState。
+    """[已弃用] 保留供旧测试兼容。"""
+    return AgentGraphState()
 
-    用于将旧版图形状态迁移到新架构状态。
-    """
-    current_user = ext_state.get("current_user") or UserContext(
-        user_id="default_user",
-        user_name="主人",
-        role="member",
-    )
 
-    memory = MemoryStoreState(
-        user_id=current_user.user_id,
-        household_profile={
-            "user_name": current_user.user_name,
-            "role": current_user.role,
-            "current_zone": current_user.current_zone,
-        },
-        user_preferences={
-            "diet": ext_state.get("user_preference", "无特殊要求"),
-            "reminder_time": ext_state.get("reminder_time", ""),
-        },
-    )
-
-    scratchpad: Dict[str, Any] = {
-        "interaction_mode": ext_state.get("interaction_mode", "normal"),
-        "current_context_item": ext_state.get("current_context_item"),
-        "pending_item_selection": ext_state.get("pending_item_selection", []),
-        "pending_operation": ext_state.get("pending_operation"),
-        "mutation_logs": ext_state.get("mutation_logs", []),
-        "inventory": ext_state.get("inventory", []),
-        "last_added_item": ext_state.get("last_added_item"),
-        "confirmed_item_id": ext_state.get("confirmed_item_id"),
-        "confirmed_item_ids": ext_state.get("confirmed_item_ids", []),
-        "confirmed_patch": ext_state.get("confirmed_patch"),
-        "pending_add_items": ext_state.get("pending_add_items", []),
-    }
-
-    return AgentGraphState(
-        session_id=session_id or f"sess_{uuid.uuid4().hex[:12]}",
-        trace_id=trace_id or f"trace_{uuid.uuid4().hex[:12]}",
-        execution_mode="NEW",
-        raw_user_input=ext_state.get("raw_text_input", ""),
-        normalized_request={
-            "image_payloads": ext_state.get("image_payloads", []),
-            "intent": ext_state.get("intent", ""),
-            "extracted_entities": ext_state.get("extracted_entities", {}),
-        },
-        final_response={
-            "reply_text": ext_state.get("reply_text", ""),
-            "recipe_recommendation": ext_state.get("recipe_recommendation"),
-        },
-        memory=memory,
-        workspace=WorkspaceStoreState(
-            scratchpad=scratchpad,
-        ),
-    )
+# ==========================================
+# 9. 快照与幂等工具函数
+# ==========================================
 
 
 def create_snapshot(state: AgentGraphState, reason: str = "CLARIFICATION") -> SnapshotStoreState:
