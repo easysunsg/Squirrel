@@ -2357,8 +2357,15 @@ def build_squirrel_graph():
         },
     )
 
-    # capability_router → planner_node → action_queue_node → loop_guard_node
-    graph.add_edge("capability_router", "planner_node")
+    # capability_router → query_handler (查询类) / planner_node (变更类)
+    graph.add_conditional_edges(
+        "capability_router",
+        route_after_capability,
+        {
+            "mutation": "planner_node",
+            "query": "query_handler",
+        },
+    )
     graph.add_edge("planner_node", "action_queue_node")
 
     # loop_guard_node → tool_executor (继续) / post_process (熔断)
@@ -2401,10 +2408,11 @@ def build_squirrel_graph():
         },
     )
 
-    # mutation_executor → [Phase 4 执行管道]
+    # mutation_executor → tool_executor
     graph.add_edge("mutation_executor", "tool_executor")
 
-    # query_handler → [Phase 4 执行管道]
+    # query_handler → response_generator (查询类不需要 ToolExecutor)
+    graph.add_edge("query_handler", "response_generator")
     graph.add_edge("query_handler", "tool_executor")
 
     # confirm_subgraph_handler → mutation_executor (success) / post_process (cancel)

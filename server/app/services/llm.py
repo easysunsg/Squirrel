@@ -119,6 +119,7 @@ class LLMService:
             "model": self.model,
             "messages": messages,
             "temperature": 0.1,
+            "stream": False,
         }
 
         if response_format:
