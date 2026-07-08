@@ -343,35 +343,61 @@ def goal_manager_node(state: ExtendedGraphState) -> Dict[str, Any]:
 def snapshot_store_node(state: ExtendedGraphState) -> Dict[str, Any]:
     """【快照管理】挂起时封存现场快照到 DB。
 
-    当节点检测到参数缺失或高危操作需要用户确认时，
-    将当前执行上下文保存为快照并设置 is_suspended。
+    当检测到以下情况时保存挂起快照：
+    - pending_selection 模式（多选确认）
+    - 参数缺失（missing_parameters）
+    - 高风险操作被拦截（is_blocked）
+    - 无效操作（is_invalid）
+    - 预算超限（budget_exceeded）
     """
     entities = state.get("extracted_entities", {})
     pending_op = state.get("pending_operation")
     interaction_mode = state.get("interaction_mode", "normal")
     reply_text = state.get("reply_text", "")
+    missing = state.get("missing_parameters", [])
+    is_blocked = state.get("is_blocked", False)
+    is_invalid = state.get("is_invalid", False)
+    budget_exceeded = state.get("budget_exceeded", False)
 
-    # 只有在 pending_selection 模式且有 pending_operation 时才需要保存快照
-    if interaction_mode == "pending_selection" and pending_op:
+    # 判定是否需要挂起
+    needs_suspend = (
+        (interaction_mode == "pending_selection" and pending_op)
+        or bool(missing)
+        or is_blocked
+        or is_invalid
+        or budget_exceeded
+    )
+
+    if needs_suspend:
+        # 推导挂起原因
+        if is_blocked:
+            suspension_reason = "POLICY_BLOCKED"
+        elif is_invalid:
+            suspension_reason = "INVALID_OPERATION"
+        elif budget_exceeded:
+            suspension_reason = "BUDGET_EXCEEDED"
+        elif bool(missing):
+            suspension_reason = "MISSING_PARAMETERS"
+        else:
+            suspension_reason = "CONFIRMATION"
+
         try:
             from app.db.sqlite import connect
-            from datetime import datetime, timedelta
 
             snapshot_data = {
                 "is_suspended": True,
                 "execution_mode": "SUSPENDED",
-                "suspension_reason": "CONFIRMATION",
+                "suspension_reason": suspension_reason,
                 "workspace_snapshot": {
                     "interaction_mode": interaction_mode,
                     "pending_item_selection": state.get("pending_item_selection", []),
                     "pending_operation": pending_op.model_dump() if hasattr(pending_op, "model_dump") else pending_op,
                     "current_context_item": state.get("current_context_item"),
                     "mutation_logs": state.get("mutation_logs", []),
+                    "reply_text": reply_text,
                 },
-                "loop_depth_snapshot": 0,
-                "missing_parameters": [],
+                "missing_parameters": missing,
                 "blocked_action_id": None,
-                "user_choice_options": [],
                 "raw_user_input": state.get("raw_text_input", ""),
             }
 
@@ -384,7 +410,7 @@ def snapshot_store_node(state: ExtendedGraphState) -> Dict[str, Any]:
                     snapshot_data=snapshot_data,
                     ttl_minutes=60,
                 )
-            logger.info("[SnapshotStore] 已保存挂起快照")
+            logger.info("[SnapshotStore] 已保存挂起快照 reason=%s", suspension_reason)
         except Exception:
             logger.exception("[SnapshotStore] 保存快照失败")
 
@@ -632,14 +658,6 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
         "last_added_item": last_added,
         "current_context_item": current_context,
     }
-
-
-def route_by_new_intent(state: ExtendedGraphState) -> Literal["mutation", "query"]:
-    """【条件路由】mutation → conflict_batch_resolver / query → query_handler。"""
-    intent = state.get("intent", "chat")
-    if intent in ("add", "consume", "remove", "update_location", "update_expiry", "update_remaining"):
-        return "mutation"
-    return "query"
 
 
 # ==============================
@@ -2275,7 +2293,6 @@ def build_squirrel_graph():
     # 原有节点
     graph.add_node("input_router", multimodal_identity_router_node)
     graph.add_node("intent_classifier", intent_classifier_node)
-    graph.add_node("conflict_batch_resolver", conflict_batch_resolver_node)
     graph.add_node("confirm_subgraph_handler", confirm_subgraph_handler_node)
     graph.add_node("mutation_executor", mutation_executor_node)
     graph.add_node("query_handler", query_handler_node)
@@ -2298,8 +2315,8 @@ def build_squirrel_graph():
     graph.add_edge("reference_resolver", "goal_manager")
     graph.add_edge("goal_manager", "input_router")
 
-    # snapshot_store → input_router (恢复后继续走 input_router)
-    graph.add_edge("snapshot_store", "input_router")
+    # snapshot_store → response_generator (挂起快照后直接输出，下次从 START 由 re_entry_router 恢复)
+    graph.add_edge("snapshot_store", "response_generator")
 
     # input_router → confirm_subgraph_handler / intent_classifier / post_process
     graph.add_conditional_edges(
@@ -2329,7 +2346,7 @@ def build_squirrel_graph():
         route_after_policy,
         {
             "ready": "pre_execution_checker",
-            "blocked": "response_generator",  # 被策略拦截 → 直接输出
+            "blocked": "snapshot_store",  # 被策略拦截 → 挂起快照（图中设计）
         },
     )
     graph.add_conditional_edges(
@@ -2337,7 +2354,7 @@ def build_squirrel_graph():
         route_after_pre_execution,
         {
             "ready": "budget_guard",
-            "invalid": "response_generator",  # 无效操作 → 直接输出
+            "invalid": "snapshot_store",  # 无效操作 → 挂起快照（图中设计）
         },
     )
     graph.add_conditional_edges(
@@ -2357,44 +2374,36 @@ def build_squirrel_graph():
         },
     )
 
-    # capability_router → query_handler (查询类) / planner_node (变更类)
+    # capability_router → loop_guard_node (先做熔断检查再规划，与 mermaid-diagram 一致)
     graph.add_conditional_edges(
         "capability_router",
         route_after_capability,
         {
-            "mutation": "planner_node",
+            "mutation": "loop_guard_node",
             "query": "query_handler",
         },
     )
-    graph.add_edge("planner_node", "action_queue_node")
 
-    # loop_guard_node → tool_executor (继续) / post_process (熔断)
+    # loop_guard_node → planner_node (深度正常才规划) / response_generator (熔断)
     graph.add_conditional_edges(
         "loop_guard_node",
         route_after_loop_guard,
         {
-            "continue": "tool_executor",
+            "continue": "planner_node",
             "halt": "response_generator",
         },
     )
 
-    # action_queue_node → loop_guard_node (有动作) / post_process (空)
+    # planner_node → action_queue_node
+    graph.add_edge("planner_node", "action_queue_node")
+
+    # action_queue_node → tool_executor (有动作) / response_generator (空)
     graph.add_conditional_edges(
         "action_queue_node",
         route_after_queue,
         {
-            "has_action": "loop_guard_node",
+            "has_action": "tool_executor",
             "empty": "response_generator",
-        },
-    )
-
-    # conflict_batch_resolver → mutation_executor / post_process
-    graph.add_conditional_edges(
-        "conflict_batch_resolver",
-        route_after_resolver,
-        {
-            "execute": "mutation_executor",
-            "pending": "response_generator",
         },
     )
 
@@ -2413,7 +2422,6 @@ def build_squirrel_graph():
 
     # query_handler → response_generator (查询类不需要 ToolExecutor)
     graph.add_edge("query_handler", "response_generator")
-    graph.add_edge("query_handler", "tool_executor")
 
     # confirm_subgraph_handler → mutation_executor (success) / post_process (cancel)
     # 已有上面的条件边
@@ -2438,12 +2446,12 @@ def build_squirrel_graph():
     graph.add_edge("state_updater", "checkpoint_node")
     graph.add_edge("checkpoint_node", "task_evaluator")
 
-    # task_evaluator → 分流
+    # task_evaluator → 分流（continue 路径经过 loop_guard_node 熔断检查，与 mermaid-diagram 一致）
     graph.add_conditional_edges(
         "task_evaluator",
         route_after_evaluator,
         {
-            "continue": "planner_node",    # 重规划 → 继续执行
+            "continue": "loop_guard_node",    # 重规划→先经过 LoopGuard 熔断检查
             "done": "response_generator",         # 执行完成
             "suspend": "snapshot_store",    # 挂起
         },
