@@ -94,6 +94,8 @@ class LLMService:
 
         # 复用http客户端，长连接池
         self._http_client = httpx.Client(timeout=self.timeout)
+        # 用于快速超时校验连接可用的短超时客户端
+        self._ping_client = httpx.Client(timeout=5.0)
 
         if self.enabled:
             logger.info(
@@ -137,6 +139,8 @@ class LLMService:
             # 多层安全校验
             choices = data.get("choices", [])
             if not choices:
+                # LLM 可能在流式模式返回空 choices
+                logger.warning("LLM response empty choices, raw=%s", str(data)[:200])
                 raise ValueError(f"LLM response empty choices, raw resp: {data}")
 
             first_msg = choices[0].get("message", {})
