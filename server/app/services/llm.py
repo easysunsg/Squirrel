@@ -1,8 +1,8 @@
 """LLM service for intelligent parsing and generation."""
 
 import json
-from typing import Any, Optional
-import httpx
+from typing import Optional
+import litellm
 import logging
 
 from app.core.config import settings
@@ -80,6 +80,17 @@ ALLERGEN_INTERCEPT_KEYWORDS = [
 ]
 
 
+# litellm provider prefix mapping
+PROVIDER_PREFIX_MAP: dict[str, str] = {
+    "openai": "openai/",
+    "anthropic": "anthropic/",
+    "ollama": "ollama/",
+    "google": "gemini/",
+    "deepseek": "deepseek/",
+    "reality": "openai/",
+}
+
+
 class LLMService:
     """Wrapper for LLM API calls with fallback to rule-based parsing."""
 
@@ -90,12 +101,9 @@ class LLMService:
         self.model = settings.ai_model
         # 配置化超时
         self.timeout = getattr(settings, "ai_timeout", 30.0)
+        self.max_retries = getattr(settings, "ai_max_retries", 2)
         self.enabled = self.provider != "mock" and bool(self.api_key)
-
-        # 复用http客户端，长连接池
-        self._http_client = httpx.Client(timeout=self.timeout)
-        # 用于快速超时校验连接可用的短超时客户端
-        self._ping_client = httpx.Client(timeout=5.0)
+        self._provider_prefix = PROVIDER_PREFIX_MAP.get(self.provider, "openai/")
 
         if self.enabled:
             logger.info(
@@ -107,59 +115,30 @@ class LLMService:
         else:
             logger.info("LLM service disabled, using rule-based fallback")
 
-    # 程序销毁时关闭连接池
-    def __del__(self):
-        self._http_client.close()
-
-    def _call_openai_compatible(self, messages: list[dict], response_format: Optional[dict] = None) -> str:
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0.1,
-            "stream": False,
-        }
-
-        if response_format:
-            payload["response_format"] = response_format
-
+    def _call_model(self, messages: list[dict], response_format: Optional[dict] = None) -> str:
+        model_str = f"{self._provider_prefix}{self.model}"
         try:
-            response = self._http_client.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=payload,
+            response = litellm.completion(
+                model=model_str,
+                messages=messages,
+                temperature=0.1,
+                response_format=response_format,
+                api_key=self.api_key or None,
+                base_url=self.base_url or None,
+                timeout=self.timeout,
+                num_retries=self.max_retries,
             )
-            response.raise_for_status()
-            data = response.json()
-
-            # 多层安全校验
-            choices = data.get("choices", [])
-            if not choices:
-                # LLM 可能在流式模式返回空 choices
-                logger.warning("LLM response empty choices, raw=%s", str(data)[:200])
-                raise ValueError(f"LLM response empty choices, raw resp: {data}")
-
-            first_msg = choices[0].get("message", {})
-            content = first_msg.get("content", "")
-            if content is None:
-                content = ""
-
+            content = response.choices[0].message.content or ""
             return content.strip()
-
-        except httpx.HTTPStatusError as e:
-            # 区分HTTP状态码异常
-            logger.error(f"LLM http status error code={e.response.status_code}")
-            raise
-        except httpx.TimeoutException:
-            logger.error("LLM api request timeout")
-            raise
         except Exception:
             logger.exception("LLM API call failed")
             raise
+
+    def extract_raw_json(self, messages: list[dict], response_format: Optional[dict] = None) -> str:
+        """Low-level: send messages and get raw text back. Used by parser.py."""
+        if not self.enabled:
+            raise RuntimeError("LLM service is not enabled")
+        return self._call_model(messages, response_format)
 
     def classify_intent(
         self,
@@ -250,7 +229,7 @@ class LLMService:
         ]
 
         try:
-            response = self._call_openai_compatible(
+            response = self._call_model(
                 messages,
                 response_format={"type": "json_object"},
             )
@@ -307,7 +286,7 @@ class LLMService:
         ]
 
         try:
-            response = self._call_openai_compatible(
+            response = self._call_model(
                 messages,
                 response_format={"type": "json_object"},
             )
@@ -362,7 +341,7 @@ class LLMService:
         ]
 
         try:
-            response = self._call_openai_compatible(messages)
+            response = self._call_model(messages)
             logger.info("Chat reply generated for message=%r", user_message)
             return response
         except Exception:
@@ -398,7 +377,7 @@ class LLMService:
         ]
 
         try:
-            response = self._call_openai_compatible(
+            response = self._call_model(
                 messages,
                 response_format={"type": "json_object"},
             )

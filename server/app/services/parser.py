@@ -535,7 +535,7 @@ def extract_intent_with_llm(text: str) -> IntentExtractionResult | None:
         prompt = INTENT_EXTRACT_PROMPT.format(user_text=text)
         messages = [{"role": "user", "content": prompt}]
 
-        response_text = llm_service._call_openai_compatible(
+        response_text = llm_service.extract_raw_json(
             messages,
             response_format={"type": "json_object"},
         )
