@@ -1,6 +1,7 @@
 """LLM service for intelligent parsing and generation."""
 
 import json
+import os
 from typing import Optional
 import litellm
 import logging
@@ -79,6 +80,7 @@ ALLERGEN_INTERCEPT_KEYWORDS = [
     "素食", "蔬菜",
 ]
 
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 # litellm provider prefix mapping
 PROVIDER_PREFIX_MAP: dict[str, str] = {
@@ -128,6 +130,8 @@ class LLMService:
                 timeout=self.timeout,
                 num_retries=self.max_retries,
             )
+            if not response.choices:
+                raise RuntimeError("LLM 返回空 choices 列表")
             content = response.choices[0].message.content or ""
             return content.strip()
         except Exception:
