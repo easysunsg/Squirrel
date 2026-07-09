@@ -693,6 +693,7 @@ def run_all_scenarios_and_generate_doc() -> None:
     ]
 
     # Write document header
+    print(OUTPUT_FILE)
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(f"# 人与智能体的日常对话：50个场景测试结果\n\n")
         f.write(f"> 以下对话由测试程序 `test_daily_scenarios.py` 自动生成，\n")
