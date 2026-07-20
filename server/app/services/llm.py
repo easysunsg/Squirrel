@@ -124,6 +124,7 @@ class LLMService:
                 model=model_str,
                 messages=messages,
                 temperature=0.1,
+                drop_params=True,
                 response_format=response_format,
                 api_key=self.api_key or None,
                 base_url=self.base_url or None,
