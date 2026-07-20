@@ -17,14 +17,16 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import create_app
+from app.core.config import settings
 
 
 # ---------------------------------------------------------------------------
@@ -132,9 +134,30 @@ def _current_items(client: TestClient) -> list[dict[str, Any]]:
 
 
 @pytest.fixture
-def client():
-    """Each test gets a fresh app (fresh in-memory SQLite DB)."""
-    return TestClient(create_app())
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """Give each scenario isolated SQLite, Markdown, and vector-store paths."""
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "storage_dir", tmp_path / "storage")
+    monkeypatch.setattr(settings, "chroma_enabled", False)
+
+    # Import only after overriding settings: app.main creates a global app on import.
+    from app.main import create_app
+    from app.services.vector_store import vector_store
+
+    monkeypatch.setattr(vector_store, "_collection", None)
+
+    with TestClient(create_app()) as test_client:
+        yield test_client
+
+
+def test_client_uses_isolated_storage(client: TestClient, tmp_path: Path) -> None:
+    """The QA suite must never write to configured development storage."""
+    from app.services.vector_store import vector_store
+
+    assert settings.database_path == tmp_path / "data" / "squirrel.sqlite3"
+    assert settings.database_path.exists()
+    assert settings.storage_dir == tmp_path / "storage"
+    assert not vector_store.enabled
 
 
 # ===================================================================
@@ -884,7 +907,33 @@ def generate_qa_report() -> None:
 
     Output: server/tests/qa/qa-test-results.md
     """
-    client = TestClient(create_app())
+    with TemporaryDirectory(prefix="squirrel-qa-") as temp_dir:
+        original_data_dir = settings.data_dir
+        original_storage_dir = settings.storage_dir
+        original_chroma_enabled = settings.chroma_enabled
+        settings.data_dir = Path(temp_dir) / "data"
+        settings.storage_dir = Path(temp_dir) / "storage"
+        settings.chroma_enabled = False
+
+        try:
+            from app.main import create_app
+            from app.services.vector_store import vector_store
+
+            original_vector_collection = vector_store._collection
+            vector_store._collection = None
+            try:
+                with TestClient(create_app()) as client:
+                    _generate_qa_report(client)
+            finally:
+                vector_store._collection = original_vector_collection
+        finally:
+            settings.data_dir = original_data_dir
+            settings.storage_dir = original_storage_dir
+            settings.chroma_enabled = original_chroma_enabled
+
+
+def _generate_qa_report(client: TestClient) -> None:
+    """Generate the report using an already isolated application client."""
 
     expected_replies = _parse_demo_expected()
 
