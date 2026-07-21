@@ -35,6 +35,7 @@ from app.services.parser import (
     days_from_now,
     extract_expire_patch,
     extract_location_update,
+    extract_target_title,
     extract_remaining_patch,
     extract_search_keyword,
     infer_search_terms,
@@ -75,19 +76,37 @@ def _is_pronoun_or_garbage_target(target: str) -> bool:
     return False
 
 
-def match_search_items(text: str, inventory: list[Item]) -> list[Item]:
+def match_search_items(text: str, inventory: list[Item], exclude_item_id: str | None = None) -> list[Item]:
+    location_terms = [term for term in ("冷藏层", "冷冻层", "冰箱上层", "冰箱下层", "冰箱中层") if term in text]
+    requires_food = any(term in text for term in ("生鲜", "食材", "食品", "水果", "蔬菜"))
+    requires_plated = "盘装" in text
+
+    def within_constraints(item: Item) -> bool:
+        if exclude_item_id and item.id == exclude_item_id:
+            return False
+        if location_terms and not any(term in item.location for term in location_terms):
+            return False
+        if requires_food and item.category != "food":
+            return False
+        if requires_plated and "盘" not in " ".join([item.remark or "", *item.tags]):
+            return False
+        return True
+
     query = extract_search_keyword(text)
-    results = vector_store.search(query, inventory)
+    constrained_inventory = [item for item in inventory if within_constraints(item)]
+    results = vector_store.search(query, constrained_inventory)
     if results:
-        return results
+        return [item for item in results if within_constraints(item)][:8]
     terms = infer_search_terms(text)
     if not terms:
-        return []
+        return constrained_inventory[:8]
     matched: list[Item] = []
-    for item in inventory:
+    for item in constrained_inventory:
         haystacks = [item.title, item.location, item.spaceName, item.remark or ""]
         if any(term and any(term in value for value in haystacks) for term in terms):
             matched.append(item)
+    if not matched and (location_terms or requires_food):
+        return constrained_inventory[:8]
     return matched[:8]
 
 
@@ -538,12 +557,83 @@ def _resolve_near_reference(
     return None
 
 
+def _resolve_inventory_followup(
+    text: str,
+    last_added: dict | None,
+    current_context: dict | None,
+    inventory: list[Item],
+) -> Dict[str, Any] | None:
+    """Resolve common inventory follow-ups before an LLM can replace their target."""
+    import re as re_mod
+
+    focus = last_added or current_context
+    focus_item = None
+    if focus:
+        focus_item = next((it for it in inventory if it.id == focus.get("id")), None)
+        if not focus_item:
+            focus_item = next((it for it in inventory if it.title == focus.get("title")), None)
+
+    if "备注" in text and any(word in text for word in ("加上", "补上", "写上", "备注")):
+        if not focus_item:
+            return None
+        before_remark = re_mod.split(r"[，,]?你?(?:把)?备注", text, maxsplit=1)[0]
+        remark = before_remark.strip(" ，,。")
+        remark = re_mod.sub(r"^每盒大概有\s*", "每盒约 ", remark)
+        remark = re_mod.sub(r"(\d+)\s*(克|g|kg)", r"\1 \2", remark, flags=re_mod.I)
+        if not remark:
+            return None
+        return {
+            "intent": "update_remark",
+            "reply_text": f"准备为「{focus_item.title}」追加备注。",
+            "extracted_entities": {
+                "target": focus_item.title,
+                "target_item_id": focus_item.id,
+                "patch": {"remarkAppend": remark},
+            },
+            "current_context_item": _build_context_item(focus_item),
+        }
+
+    expire_patch = extract_expire_patch(text)
+    if expire_patch and "保质期" in text and focus_item:
+        return {
+            "intent": "update_expiry",
+            "reply_text": f"准备更新「{focus_item.title}」的保质期。",
+            "extracted_entities": {
+                "target": focus_item.title,
+                "target_item_id": focus_item.id,
+                "patch": expire_patch,
+            },
+            "current_context_item": _build_context_item(focus_item),
+        }
+
+    if re_mod.search(r"洗一盒|洗一份|准备吃|下午吃", text):
+        target = extract_target_title(text)
+        if target:
+            matched = next((it for it in inventory if it.title == target), None)
+            if matched:
+                return {
+                    "intent": "consume",
+                    "reply_text": f"准备扣减「{matched.title}」1{matched.unit}。",
+                    "extracted_entities": {
+                        "target": matched.title,
+                        "target_item_id": matched.id,
+                        "patch": {"deductCount": 1},
+                    },
+                    "current_context_item": _build_context_item(matched),
+                }
+    return None
+
+
 def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
     """【意图分类】LLM 分类 + rule fallback + 近指代消解。"""
     text = state.get("raw_text_input", "")
     inventory = state.get("inventory", [])
     last_added = state.get("last_added_item")
     current_context = state.get("current_context_item")
+
+    followup = _resolve_inventory_followup(text, last_added, current_context, inventory)
+    if followup:
+        return followup
 
     # 近指代优先
     near_ref = _resolve_near_reference(text, last_added, inventory)
@@ -609,12 +699,12 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
                     elif target and not location:
                         reply_text = "请问你想把物品放到哪里？"
 
-                elif intent == "update_expiry":
+                elif intent in ("update_expiry", "update_remark"):
                     target = entities.get("target")
                     if not target and current_context and current_context.get("title"):
                         target = current_context["title"]
                     expire_days = entities.get("expire_days")
-                    if target and expire_days is not None:
+                    if intent == "update_expiry" and target and expire_days is not None:
                         extracted["target"] = target
                         extracted["patch"] = {"expireDate": days_from_now(expire_days)}
 
@@ -651,6 +741,11 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
         entities["items"] = [op.item.model_dump()] if op.item else []
         if op.patch:
             entities["patch"] = op.patch
+    if intent in ("update_expiry", "update_remark") and not entities.get("target"):
+        focus = last_added or current_context
+        if focus and focus.get("title"):
+            entities["target"] = focus["title"]
+            entities["target_item_id"] = focus.get("id")
     return {
         "intent": intent,
         "reply_text": fallback.replyText,
@@ -701,6 +796,12 @@ def parameter_resolver_node(state: ExtendedGraphState) -> Dict[str, Any]:
         if not patch.get("expireDate") and not entities.get("expire_days"):
             missing.append("expire_date")
 
+    elif intent == "update_remark":
+        if not target:
+            missing.append("target")
+        if not patch.get("remarkAppend") and patch.get("remark") is None:
+            missing.append("remark")
+
     # 如果有缺失参数，设置回复文本
     if missing:
         missing_names = {
@@ -708,6 +809,7 @@ def parameter_resolver_node(state: ExtendedGraphState) -> Dict[str, Any]:
             "target": "物品名称",
             "location": "目标位置",
             "expire_date": "保质期日期",
+            "remark": "备注内容",
         }
         missing_desc = "、".join(missing_names.get(m, m) for m in missing)
         return {
@@ -896,7 +998,7 @@ def pre_execution_checker_node(state: ExtendedGraphState) -> Dict[str, Any]:
                 }
 
     # 检查2：操作不存在物品
-    if intent in ("consume", "remove", "update_location", "update_expiry") and target:
+    if intent in ("consume", "remove", "update_location", "update_expiry", "update_remark") and target:
         matched = [item for item in inventory if item.title == target]
         if not matched:
             return {
@@ -1042,6 +1144,7 @@ def capability_router_node(state: ExtendedGraphState) -> Dict[str, Any]:
         "remove": "inventory",
         "update_location": "inventory",
         "update_expiry": "inventory",
+        "update_remark": "inventory",
         "update_remaining": "inventory",
         "expiry_query": "expiration",
         "location_query": "inventory",
@@ -1083,7 +1186,7 @@ def capability_router_node(state: ExtendedGraphState) -> Dict[str, Any]:
 def _determine_risk_level(intent: str, entities: dict) -> str:
     """根据意图和参数确定风险等级。"""
     high_risk_intents = {"remove", "consume"}
-    medium_risk_intents = {"update_location", "update_expiry", "update_remaining"}
+    medium_risk_intents = {"update_location", "update_expiry", "update_remark", "update_remaining"}
 
     if intent in high_risk_intents:
         patch = entities.get("patch") or {}
@@ -1101,7 +1204,7 @@ def _determine_risk_level(intent: str, entities: dict) -> str:
 def route_after_capability(state: ExtendedGraphState) -> Literal["mutation", "query"]:
     """【条件路由】mutation → 原有 mutation 路由 / query → 原有 query 路由。"""
     intent = state.get("intent", "chat")
-    if intent in ("add", "consume", "remove", "update_location", "update_expiry", "update_remaining"):
+    if intent in ("add", "consume", "remove", "update_location", "update_expiry", "update_remark", "update_remaining"):
         return "mutation"
     return "query"
 
@@ -1206,6 +1309,7 @@ def _intent_to_capability(intent: str) -> str:
     mapping = {
         "add": "inventory", "consume": "inventory", "remove": "inventory",
         "update_location": "inventory", "update_expiry": "inventory", "update_remaining": "inventory",
+        "update_remark": "inventory",
         "expiry_query": "expiration", "location_query": "inventory", "quantity_query": "inventory",
         "search_query": "inventory", "idle_query": "inventory", "recipe": "recommendation",
         "chat": "chat",
@@ -2091,7 +2195,8 @@ def query_handler_node(state: ExtendedGraphState) -> Dict[str, Any]:
     # ------ search_query ------
     if intent == "search_query":
         text = state.get("raw_text_input", "")
-        results = match_search_items(text, inventory)
+        exclude_id = current_context.get("id") if "别的" in text and current_context else None
+        results = match_search_items(text, inventory, exclude_item_id=exclude_id)
         if not results:
             return {"reply_text": "没有找到匹配的物品。"}
         summary = "、".join(f"{item.title}（{item.spaceName}/{item.location}）" for item in results[:6])

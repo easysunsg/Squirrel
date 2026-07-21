@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 _SUPPORTED_TOOLS = {
     "inventory_add", "inventory_consume", "inventory_remove",
     "inventory_update_location", "inventory_update_expiry", "inventory_update_remaining",
+    "inventory_update_remark",
     "inventory_location_query", "inventory_quantity_query", "inventory_search_query",
 }
 
@@ -44,7 +45,7 @@ class InventoryCapability(BaseCapability):
         target = args.get("target", "")
         intent = args.get("intent", "")
 
-        if intent in ("consume", "remove", "update_location", "update_expiry"):
+        if intent in ("consume", "remove", "update_location", "update_expiry", "update_remark"):
             if not target:
                 errors.append("缺少目标物品名称")
             if intent == "update_location" and not args.get("location") and not (args.get("extracted_entities", {}).get("patch") or {}).get("location"):
@@ -65,6 +66,7 @@ class InventoryCapability(BaseCapability):
             "remove": self._handle_remove,
             "update_location": self._handle_update_location,
             "update_expiry": self._handle_update_expiry,
+            "update_remark": self._handle_update_remark,
             "update_remaining": self._handle_update_remaining,
             "location_query": self._handle_location_query,
             "quantity_query": self._handle_quantity_query,
@@ -86,8 +88,10 @@ class InventoryCapability(BaseCapability):
         target = entities.get("target", "物品")
 
         mutation_logs = []
+        total_count = 0
         for item_dict in items_data:
             if isinstance(item_dict, dict):
+                total_count += int(item_dict.get("count", 1))
                 mutation_logs.append({
                     "event_id": f"evt_{datetime.now().timestamp()}",
                     "op_type": "add",
@@ -100,10 +104,14 @@ class InventoryCapability(BaseCapability):
                     "timestamp": datetime.now().isoformat(),
                 })
 
+        summary = "、".join(
+            f"{item.get('title', target)}×{item.get('count', 1)}{item.get('unit', '件')}"
+            for item in items_data if isinstance(item, dict)
+        )
         return {
-            "result": {"added_count": len(mutation_logs)},
+            "result": {"added_batches": len(mutation_logs), "added_count": total_count},
             "mutation_logs": mutation_logs,
-            "reply_text": f"登记成功！已帮您将{len(mutation_logs)}件物品录入系统。",
+            "reply_text": f"登记成功！已新增 {len(mutation_logs)} 个批次，共 {summary}。",
             "pending_add_items": items_data,
         }
 
@@ -112,6 +120,7 @@ class InventoryCapability(BaseCapability):
         pending_op = context.get("pending_operation")
         mutation_logs = []
         reply_text = ""
+        affected_item = None
 
         if pending_op and pending_op.source_batch_ids:
             deduct_counts = (pending_op.patch or {}).get("deductCounts", {})
@@ -119,6 +128,7 @@ class InventoryCapability(BaseCapability):
                 matched = [it for it in inventory if it.id == batch_id]
                 if matched:
                     item = matched[0]
+                    affected_item = item
                     actual_deduct = deduct_counts.get(batch_id, 1) if deduct_counts else 1
                     mutation_logs.append({
                         "event_id": f"evt_{datetime.now().timestamp()}",
@@ -133,8 +143,13 @@ class InventoryCapability(BaseCapability):
         else:
             patch = entities.get("patch") or {}
             deduct_count = patch.get("deductCount") or 1
-            matched = [it for it in inventory if it.title == target]
+            target_item_id = entities.get("target_item_id")
+            matched = [
+                it for it in inventory
+                if (target_item_id and it.id == target_item_id) or (not target_item_id and it.title == target)
+            ]
             for item in matched[:1]:
+                affected_item = item
                 mutation_logs.append({
                     "event_id": f"evt_{datetime.now().timestamp()}",
                     "op_type": "consume",
@@ -147,7 +162,10 @@ class InventoryCapability(BaseCapability):
                 })
 
         if not reply_text:
-            reply_text = f"好滴{user_name}，已帮您处理了 **{target}**。" if target else "已处理完成。"
+            if mutation_logs and affected_item:
+                reply_text = f"已扣减「{affected_item.title}」{abs(mutation_logs[0]['delta'])}{affected_item.unit}。"
+            else:
+                reply_text = f"未找到可扣减的「{target}」。" if target else "没有找到要扣减的物品。"
 
         return {
             "result": {"consumed_count": len(mutation_logs)},
@@ -227,7 +245,11 @@ class InventoryCapability(BaseCapability):
         expire_date = patch.get("expireDate", "")
         mutation_logs = []
 
-        matched = [it for it in inventory if it.title == target]
+        target_item_id = entities.get("target_item_id")
+        matched = [
+            it for it in inventory
+            if (target_item_id and it.id == target_item_id) or (not target_item_id and it.title == target)
+        ]
         for item in matched[:1]:
             mutation_logs.append({
                 "event_id": f"evt_{datetime.now().timestamp()}",
@@ -244,7 +266,44 @@ class InventoryCapability(BaseCapability):
         return {
             "result": {"updated_count": len(mutation_logs)},
             "mutation_logs": mutation_logs,
-            "reply_text": f"「{target}」的保质期已更新。" if target else "保质期已更新。",
+            "reply_text": f"「{target}」的保质期已更新为 {expire_date}。" if mutation_logs else f"未找到可更新的「{target}」。",
+        }
+
+    def _handle_update_remark(self, entities: dict, inventory: list, user_id: str, user_name: str, context: dict) -> dict:
+        target = entities.get("target", "")
+        patch = entities.get("patch") or {}
+        append_text = str(patch.get("remarkAppend", "")).strip()
+        replacement = patch.get("remark")
+        target_item_id = entities.get("target_item_id")
+        matched = [
+            it for it in inventory
+            if (target_item_id and it.id == target_item_id) or (not target_item_id and it.title == target)
+        ]
+        mutation_logs = []
+        for item in matched[:1]:
+            old_remark = item.remark or ""
+            if replacement is not None:
+                new_remark = str(replacement)
+            elif old_remark and append_text:
+                new_remark = f"{old_remark}\n{append_text}"
+            else:
+                new_remark = append_text or old_remark
+            mutation_logs.append({
+                "event_id": f"evt_{datetime.now().timestamp()}",
+                "op_type": "update",
+                "target_instance_id": item.id,
+                "sku_title": item.title,
+                "patch": {"remark": new_remark},
+                "delta": 0,
+                "operator_id": user_id,
+                "operator_name": user_name,
+                "timestamp": datetime.now().isoformat(),
+            })
+
+        return {
+            "result": {"updated_count": len(mutation_logs)},
+            "mutation_logs": mutation_logs,
+            "reply_text": f"已为「{target}」追加备注：{append_text}" if mutation_logs else f"未找到可更新的「{target}」。",
         }
 
     def _handle_update_remaining(self, entities: dict, inventory: list, user_id: str, user_name: str, context: dict) -> dict:

@@ -42,7 +42,7 @@ def guess_space(text: str) -> tuple[str, str]:
 
 def guess_category(title: str) -> InventoryCategory:
     """Guess the inventory category based on item title."""
-    if re.search(r"蛋|奶|肉|菜|果|面包|米|面|水|饮|酒|茶|豆|酱|醋|油|糖|粉|料", title):
+    if re.search(r"蛋|奶|肉|菜|果|草莓|莓|香蕉|苹果|葡萄|面包|米|面|水|饮|酒|茶|豆|酱|醋|油|糖|粉|料", title):
         return "food"
     if re.search(r"药|维C|维生素|感冒|消炎|止痛|胶囊", title):
         return "medicine"
@@ -152,11 +152,14 @@ def extract_target_title(text: str) -> str | None:
         r"把(.+?)(?:吃完|用完|扔掉|扔了|坏了|喝了一半|用了\d+个|用了\d+瓶|用了|换到|移到|挪到|放到|放进|放在)",
         r"(.+?)(?:吃完了|用完了|扔掉了|坏了，?扔掉|坏了|喝了一半|用了\d+个|用了\d+瓶|用了|换到|移到|挪到|放到|放进|放在)",
         r"(.+?)保质期(?:再)?延\s*(\d+)\s*天",
+        r"(.+?)(?:的)?保质期(?:一般是|是|为)\s*\d+\s*天",
+        r"(.+?)(?:洗|准备吃|下午吃)\s*(?:一盒|一份|一个|一些)?",
     ]
     for pattern in patterns:
         match = re.search(pattern, cleaned)
         if match:
             title = match.group(1).strip(" 把刚才我今天将，,。")
+            title = re.sub(r"^(?:知道了[，,]?|好的[，,]?|那就)", "", title).strip()
             return title or None
     return None
 
@@ -172,6 +175,9 @@ def extract_expire_patch(text: str) -> dict[str, str] | None:
     days_match = re.search(r"保质期(?:再)?延\s*(\d+)\s*天", text)
     if days_match:
         return {"expireDate": days_from_now(int(days_match.group(1)))}
+    duration_match = re.search(r"保质期(?:一般是|是|为)\s*(\d+)\s*天", text)
+    if duration_match:
+        return {"expireDate": days_from_now(int(duration_match.group(1)))}
     date_match = re.search(r"(?:到期|保质期)(?:改到|改成|设为)?\s*(\d{4}-\d{2}-\d{2})", text)
     if date_match:
         return {"expireDate": date_match.group(1)}
@@ -420,7 +426,7 @@ class IntentExtractionResult(BaseModel):
 
     intent: str = Field(
         description="用户意图，只能取以下枚举值：add, consume, remove, update_location, "
-        "update_expiry, quantity_query, query_total, location_query, expiry_query, "
+        "update_expiry, update_remark, quantity_query, query_total, location_query, expiry_query, "
         "idle_query, recipe, search_query, chat"
     )
     item_name: str = Field(default="", description="物品名称，提取不到则为空字符串")
@@ -572,13 +578,25 @@ def build_chat_result_by_rules(text: str) -> ChatResult:
             operations=[ChatOperation(type="remove", target=target, removeReason="discarded")],
         )
 
-    if any(word in text for word in ["吃完", "用完", "用了", "吃了", "吃掉", "喝了一半", "一半"]):
+    if any(word in text for word in ["吃完", "用完", "用了", "吃了", "吃掉", "喝了一半", "一半", "洗一盒", "洗一份", "准备吃", "下午吃"]):
         target = extract_target_title(text)
+        patch = {"deductCount": 1} if re.search(r"洗一盒|洗一份|准备吃|下午吃", text) else None
         return ChatResult(
             intent="consume",
             replyText="我会尝试更新该物品的消耗情况。",
-            operations=[ChatOperation(type="consume", target=target)],
+            operations=[ChatOperation(type="consume", target=target, patch=patch)],
         )
+
+    remark_match = re.search(r"(?:把|给)?(.+?)(?:的)?备注(?:加上|补上|写上|改成|设置为)?\s*[:：]?\s*(.+)$", text)
+    if remark_match:
+        target = remark_match.group(1).strip(" ，,。") or None
+        remark = remark_match.group(2).strip(" ，,。")
+        if remark:
+            return ChatResult(
+                intent="update_remark",
+                replyText="我会把这段内容追加到物品备注。",
+                operations=[ChatOperation(type="update", target=target, patch={"remarkAppend": remark})],
+            )
 
     if any(word in text for word in ["换到", "移到", "挪到", "放到", "放进", "放在"]):
         target = extract_target_title(text)

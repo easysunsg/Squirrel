@@ -57,6 +57,7 @@ def _intent_to_capability(intent: str) -> str | None:
         "remove": "inventory",
         "update_location": "inventory",
         "update_expiry": "inventory",
+        "update_remark": "inventory",
         "update_remaining": "inventory",
         "expiry_query": "expiration",
         "location_query": "inventory",

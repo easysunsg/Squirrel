@@ -161,7 +161,7 @@ class LLMService:
 
         Returns:
             {
-                "intent": str,  # add/consume/remove/update_location/update_expiry/expiry_query/location_query/search_query/idle_query/recipe/chat
+                "intent": str,  # add/consume/remove/update_location/update_expiry/update_remark/expiry_query/location_query/search_query/idle_query/recipe/chat
                 "entities": {
                     "target": str | None,
                     "count": int | None,
@@ -183,6 +183,7 @@ class LLMService:
 - remove: 移除物品（例如：扔掉、坏了、清掉）
 - update_location: 更新物品位置（例如：换到、移到、放到）
 - update_expiry: 更新保质期（例如：保质期延长、明天过期）
+- update_remark: 添加或修改备注（例如：每盒500克，把备注加上）
 - expiry_query: 查询临期物品（例如：什么快过期、临期物品）
 - location_query: 查询物品位置（例如：螺蛳粉在哪、放哪了）
 - quantity_query: 查询物品数量（例如：还有几个玉米、还剩多少牛奶）

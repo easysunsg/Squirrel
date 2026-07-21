@@ -427,6 +427,7 @@ def confirm_items(request: ConfirmRequest):
                 pending_item_selection=conv_state.get("pending_item_selection"),
                 pending_operation=conv_state.get("pending_operation"),
                 last_added_item=created[-1].model_dump(),
+                current_context_item=created[-1].model_dump(),
             )
 
         state = get_state(conn)
@@ -434,8 +435,8 @@ def confirm_items(request: ConfirmRequest):
     sync_inventory_markdown(state)
     vector_store.upsert_items(created)
 
-    titles = "、".join(f"{item.title}×{item.count}" for item in created)
-    reply_text = f"确认入库，已新增 {len(created)} 件物品：{titles}。"
+    titles = "、".join(f"{item.title}×{item.count}{item.unit}" for item in created)
+    reply_text = f"确认入库，已新增 {len(created)} 个批次：{titles}。"
     confirm_message = Message(
         id=f"msg-confirm-{uuid4().hex[:8]}",
         sender="assistant",

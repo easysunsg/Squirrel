@@ -11,6 +11,7 @@ ChatIntent = Literal[
     "remove",
     "update_location",
     "update_expiry",
+    "update_remark",
     "update_remaining",
     "expiry_query",
     "location_query",
