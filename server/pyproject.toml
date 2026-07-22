@@ -36,6 +36,9 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+  "llm_integration: calls the real LLM endpoint configured in .env",
+]
 
 [dependency-groups]
 dev = [
