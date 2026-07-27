@@ -941,7 +941,7 @@ def _generate_qa_report(client: TestClient) -> None:
 
     report_lines = [
         "# Q&A 50场景测试结果报告\n",
-        f"> 测试日期：{date.today().isoformat()}\n",
+        f"> 测试日期：{date.today().format()}\n",
         "> 测试方式：通过 `POST /api/chat` 端点逐轮发送用户消息并记录回复\n",
     ]
 

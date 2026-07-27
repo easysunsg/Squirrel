@@ -1,6 +1,7 @@
-﻿"""新架构 LangGraph — 6 节点简洁拓扑
+﻿"""Squirrel 库存助手的 LangGraph 工作流。
 
-重写说明：
+架构说明：
+- 当前拓扑由输入、控制、规划、执行、校验、恢复和输出等节点组成
 - 保留 run_squirrel_graph 签名不变，外部使用者（ai.py / test_graph.py）无需改动
 - 内部使用 ExtendedGraphState 流转，输出前通过 extended_to_old_dict 适配回旧格式
 - 所有路径收敛到 post_process，消灭直通 END 的叶子节点
@@ -2398,6 +2399,7 @@ def build_squirrel_graph():
     # 原有节点
     graph.add_node("input_router", multimodal_identity_router_node)
     graph.add_node("intent_classifier", intent_classifier_node)
+    graph.add_node("conflict_batch_resolver", conflict_batch_resolver_node)
     graph.add_node("confirm_subgraph_handler", confirm_subgraph_handler_node)
     graph.add_node("mutation_executor", mutation_executor_node)
     graph.add_node("query_handler", query_handler_node)
@@ -2479,13 +2481,22 @@ def build_squirrel_graph():
         },
     )
 
-    # capability_router → loop_guard_node (先做熔断检查再规划，与 mermaid-diagram 一致)
+    # Mutation requests resolve inventory conflicts before planning.
     graph.add_conditional_edges(
         "capability_router",
         route_after_capability,
         {
-            "mutation": "loop_guard_node",
+            "mutation": "conflict_batch_resolver",
             "query": "query_handler",
+        },
+    )
+
+    graph.add_conditional_edges(
+        "conflict_batch_resolver",
+        route_after_resolver,
+        {
+            "execute": "loop_guard_node",
+            "pending": "response_generator",
         },
     )
 
@@ -2538,8 +2549,9 @@ def build_squirrel_graph():
     # task_evaluator → (done: post_process, continue: planner_node, suspend: snapshot_store)
 
     # Phase 4 内部流水线: tool_executor → result_validator → state_updater
+    graph.add_edge("tool_executor", "result_validator")
     graph.add_conditional_edges(
-        "tool_executor",
+        "result_validator",
         route_after_validation,
         {
             "pass": "state_updater",

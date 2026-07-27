@@ -16,11 +16,13 @@
 from __future__ import annotations
 
 import json
+import operator
 import uuid
 from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
+from langgraph.graph import add_messages
 from pydantic import BaseModel, Field
 
 
@@ -214,90 +216,111 @@ def merge_audit_logs(old_logs: List[Dict[str, Any]], new_logs: List[Dict[str, An
 # ==========================================
 
 
-class ExtendedGraphState(TypedDict, total=False):
-    """下一代多模态家庭资产 Agent 的全局流转状态 (Graph State)
+# ============ 结构化子类型（消灭布尔爆炸）============
+class ControlVerdict(TypedDict):
+    status: Literal["pass", "blocked", "invalid", "inconsistent", "budget_exceeded"]
+    violations: list[str]
+    suspend_question: Optional[str]  # 如果需要反问用户
 
-    total=False 允许额外的内部辅助字段（如 _inventory、_last_added_item）在图中传递。
-    这是兼容层，保持与旧版 graph.py 的接口一致。
-    """
+class TaskVerdict(TypedDict):
+    decision: Literal["continue", "suspend", "done"]
+    reason: str
+    depth: int  # 当前循环深度
 
-    # ================== 入口输入层 ==================
+# ============ 主图 State（精简，只管层间通信）============
+class MainGraphState(TypedDict, total=False):
+    # --- 输入层 ---
+    messages: Annotated[list, add_messages]  # ← State B 缺的，必须有
     raw_text_input: str
-    """当前轮次用户输入的原始文本(或语音转文字结果)"""
+    image_payloads: list[str]               # ← 保留 State B 的多模态
+    current_user: dict                       # ← 保留用户身份
 
-    image_payloads: List[str]
-    """多模态输入：当前轮次上传的图片Base64列表(支持小票、条码、快照)"""
+    # --- 决策层 ---
+    intent: str
+    extracted_entities: dict
+    current_context_item: Optional[dict]     # ← 保留 State B 的上下文聚焦
+
+    # --- 控制层（结构化，非布尔）---
+    control_verdict: ControlVerdict          # ← 替代 6 个布尔
+    resolved_params: dict
+
+    # --- 循环控制 ---
+    task_verdict: TaskVerdict                # ← 替代分散的判断，含 depth
+
+    # --- 交互状态机 ---
+    interaction_mode: Literal["normal", "pending_selection", "pending_confirm"]
+    pending_operation: Optional[dict]
+    pending_item_selection: list[dict]
+
+    # --- 输出层 ---
+    reply_text: str
+    recipe_recommendation: Optional[dict]
+
+    # --- 审计（Reducer 增量追加）---
+    mutation_logs: Annotated[list[dict], operator.add]  # ← 保留 State B 的审计
+
+# ============ 子图 State（内部细节不泄漏）============
+class InventorySubState(MainGraphState):
+    inventory: list
+    last_added_item: Optional[dict]
+    confirmed_item_id: Optional[str]
+    pending_add_items: list[dict]
+
+class RecommendationSubState(MainGraphState):
+    user_preference: str
+    recipe_candidates: list[dict]
+
+
+class ExtendedGraphState(MainGraphState, total=False):
+    """Compatibility state used by the current Squirrel workflow.
+
+    The graph is being migrated toward the smaller structured states above,
+    but its nodes still exchange legacy execution and API-adapter fields.
+    LangGraph requires every persisted channel to be declared explicitly.
+    """
 
     current_user: UserContext
-    """通过网关/多账号鉴权注入的当前操作人身份上下文"""
-
-    # ================== 智能决策层 ==================
-    intent: str
-    """经 Intent Classifier 判定后的核心意图标签"""
-
-    extracted_entities: Dict[str, Any]
-    """从输入中抽取出的时空实体(如提及的数量、指定的地点别名、开封状态等)"""
-
-    # ================== 跨轮交互与状态锁 (State Lock) ==================
-    interaction_mode: str
-    """当前的交互模式: normal(正常聊天), pending_selection(等待选择/确认冲突)"""
-
-    current_context_item: Optional[Dict[str, Any]]
-    """
-    【核心重构】当前对话聚焦的物品时空上下文（消灭记忆错乱错位）
-    结构: {"instance_id": "xxx", "title": "全麦面包", "location": "厨房二级柜"}
-    """
-
-    pending_item_selection: List[Dict[str, Any]]
-    """发生冲突或多候选匹配时，推送给用户供选择的 Instance 候选集"""
-
     pending_operation: Optional[PendingOperation]
-    """当 interaction_mode 为 pending 时，被锁定的、等待用户说'确认/1'后执行的底层事务"""
+    inventory: list[Any]
+    last_added_item: Optional[dict[str, Any]]
+    user_preference: str
+    reminder_time: str
+    confirmed_item_id: Optional[str]
+    confirmed_item_ids: list[str]
+    confirmed_patch: Optional[dict[str, Any]]
+    pending_add_items: list[dict[str, Any]]
 
-    # ================== 输出与同步层 ==================
-    reply_text: str
-    """Agent 最终决定向当前用户输出的高情商文本回复"""
+    missing_parameters: list[str]
+    is_blocked: bool
+    is_invalid: bool
+    is_inconsistent: bool
+    needs_correction: bool
+    budget_exceeded: bool
+    policy_violations: list[dict[str, Any]]
+    budget_checks: list[str]
+    consistency_issues: list[str]
+    pre_execution_checks: list[str]
+    capability: str
 
-    recipe_recommendation: Optional[Dict[str, Any]]
-    """如果触发了菜谱生成，存放结构化菜谱推荐结果的容器"""
+    current_action: Optional[AgentAction]
+    action_queue: list[AgentAction]
+    execution_results: list[dict[str, Any]]
+    plan: list[AgentAction]
+    loop_depth: int
+    max_depth: int
+    graph_version: int
+    validation_passed: bool
+    validation_error: Optional[str]
+    idempotency_hit: bool
 
-    # 采用 Reducer 的增量日志流，用于追踪原子操作，方便 Post_Process 节点进行多路异步同步
-    mutation_logs: Annotated[List[Dict[str, Any]], merge_audit_logs]
-    """本次图流转中真正发生变更的数据库写操作日志(用于安全审计、撤销及异步同步向量库)"""
-
-    # ================== 内部辅助字段 ==================
-    inventory: List  # 当前库存快照（Item 列表）
-    last_added_item: Optional[Dict[str, Any]]  # 最近一次新增成功的物品
-    user_preference: str  # 用户饮食偏好
-    reminder_time: str  # 提醒时间
-    confirmed_item_id: Optional[str]  # 已确认的单选物品 ID
-    confirmed_item_ids: List[str]  # 已确认的多选物品 ID 列表
-    confirmed_patch: Optional[Dict[str, Any]]  # 已确认的补丁
-    pending_add_items: List[Dict[str, Any]]  # 待新增的物品列表（用于适配层）
-
-    # ================== 控制层字段（Phase 3） ==================
-    missing_parameters: List[str]  # 参数解析器检测到的缺失参数
-    is_blocked: bool  # 策略引擎是否拦截了操作
-    is_invalid: bool  # 预执行检查器是否判定操作无效
-    is_inconsistent: bool  # 一致性检查器检测到冲突
-    needs_correction: bool  # 是否需要自动修正
-    budget_exceeded: bool  # 预算是否超出
-    policy_violations: List[Dict[str, Any]]  # 触发的策略规则列表
-    budget_checks: List[str]  # 预算检查记录
-    consistency_issues: List[str]  # 一致性检查记录
-    pre_execution_checks: List[str]  # 预执行检查记录
-    capability: str  # 路由到的能力域名称
-    current_action: Any  # 当前执行的 AgentAction
-
-
-# ==========================================
-# 8. (保留兼容函数，已弃用)
-# ==========================================
+    _snapshot_was_restored: bool
+    _goal_resolved: bool
+    _goal_target: str
 
 
 def agent_to_extended(agent_state: AgentGraphState) -> ExtendedGraphState:
-    """[已弃用] 保留供旧测试兼容。"""
-    return {}  # type: ignore[return-value]
+    """Deprecated compatibility adapter retained for callers and tests."""
+    return {}
 
 
 def extended_to_agent(
@@ -305,8 +328,11 @@ def extended_to_agent(
     session_id: Optional[str] = None,
     trace_id: Optional[str] = None,
 ) -> AgentGraphState:
-    """[已弃用] 保留供旧测试兼容。"""
-    return AgentGraphState()
+    """Deprecated compatibility adapter retained for callers and tests."""
+    return AgentGraphState(
+        session_id=session_id or f"sess_{uuid.uuid4().hex[:12]}",
+        trace_id=trace_id or f"trace_{uuid.uuid4().hex[:12]}",
+    )
 
 
 # ==========================================
