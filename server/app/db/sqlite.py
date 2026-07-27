@@ -178,6 +178,15 @@ def init_db() -> None:
                 current_context_item TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS conversation_states (
+                user_id TEXT PRIMARY KEY,
+                interaction_mode TEXT NOT NULL DEFAULT 'normal',
+                pending_item_selection TEXT,
+                pending_operation TEXT,
+                last_added_item TEXT,
+                current_context_item TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS skus (
                 sku_id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
@@ -203,6 +212,7 @@ def init_db() -> None:
                 opened_date TEXT,
                 pao_days INTEGER NOT NULL DEFAULT 0,
                 final_expiry_date TEXT,
+                remark TEXT,
                 belongs_to_slot_id TEXT REFERENCES spatial_nodes(node_id),
                 last_modified_by TEXT NOT NULL DEFAULT 'system',
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -303,6 +313,16 @@ def init_db() -> None:
         if "last_added_item" not in cs_columns:
             conn.execute("ALTER TABLE conversation_state ADD COLUMN last_added_item TEXT")
 
+        instance_columns = {row["name"] for row in conn.execute("PRAGMA table_info(item_instances)").fetchall()}
+        if "remark" not in instance_columns:
+            conn.execute("ALTER TABLE item_instances ADD COLUMN remark TEXT")
+        conn.execute(
+            """UPDATE item_instances
+               SET remark = (SELECT items.remark FROM items WHERE items.id = item_instances.instance_id)
+               WHERE remark IS NULL
+                 AND EXISTS (SELECT 1 FROM items WHERE items.id = item_instances.instance_id)"""
+        )
+
         # === 新表迁移：为旧 items 表中的数据填充 skus + item_instances ===
         sku_table_exists = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='skus'").fetchone()
         if sku_table_exists and conn.execute("SELECT COUNT(*) FROM item_instances").fetchone()[0] == 0:
@@ -326,10 +346,10 @@ def init_db() -> None:
                 conn.execute(
                     """INSERT INTO item_instances(
                         instance_id, sku_id, space_id, location, quantity, remaining_pct,
-                        buy_date, expire_date, last_modified_by
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        buy_date, expire_date, remark, last_modified_by
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (instance_id, sku_id, row["space_id"], row["location"], row["count"],
-                     row["remaining_pct"], row["buy_date"], row["expire_date"], "system"),
+                     row["remaining_pct"], row["buy_date"], row["expire_date"], row["remark"], "system"),
                 )
 
         # 种子空间节点
@@ -452,8 +472,8 @@ def upsert_item(conn: sqlite3.Connection, item: Item) -> Item:
         """INSERT INTO item_instances(
             instance_id, sku_id, space_id, location, quantity, remaining_pct,
             buy_date, expire_date, is_opened, opened_date, pao_days,
-            final_expiry_date, belongs_to_slot_id, last_modified_by
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            final_expiry_date, remark, belongs_to_slot_id, last_modified_by
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(instance_id) DO UPDATE SET
             sku_id=excluded.sku_id,
             space_id=excluded.space_id,
@@ -466,6 +486,7 @@ def upsert_item(conn: sqlite3.Connection, item: Item) -> Item:
             opened_date=excluded.opened_date,
             pao_days=excluded.pao_days,
             final_expiry_date=excluded.final_expiry_date,
+            remark=excluded.remark,
             belongs_to_slot_id=excluded.belongs_to_slot_id,
             last_modified_by=excluded.last_modified_by,
             updated_at=CURRENT_TIMESTAMP""",
@@ -474,7 +495,7 @@ def upsert_item(conn: sqlite3.Connection, item: Item) -> Item:
             item.spaceId, item.location, item.count,
             item.remainingPct, item.buyDate, item.expireDate,
             1 if item.isOpened else 0, item.openedDate, item.paoDays,
-            item.finalExpiryDate or item.expireDate, item.belongsToSlotId,
+            item.finalExpiryDate or item.expireDate, item.remark, item.belongsToSlotId,
             item.last_modified_by if hasattr(item, 'last_modified_by') else "system",
         ),
     )
@@ -568,8 +589,8 @@ def upsert_instance(conn: sqlite3.Connection, instance: ItemInstance) -> ItemIns
         """INSERT INTO item_instances(
             instance_id, sku_id, space_id, location, quantity, remaining_pct,
             buy_date, expire_date, is_opened, opened_date, pao_days,
-            final_expiry_date, belongs_to_slot_id, last_modified_by
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            final_expiry_date, remark, belongs_to_slot_id, last_modified_by
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(instance_id) DO UPDATE SET
             sku_id=excluded.sku_id,
             space_id=excluded.space_id,
@@ -582,6 +603,7 @@ def upsert_instance(conn: sqlite3.Connection, instance: ItemInstance) -> ItemIns
             opened_date=excluded.opened_date,
             pao_days=excluded.pao_days,
             final_expiry_date=excluded.final_expiry_date,
+            remark=excluded.remark,
             belongs_to_slot_id=excluded.belongs_to_slot_id,
             last_modified_by=excluded.last_modified_by,
             updated_at=CURRENT_TIMESTAMP""",
@@ -590,7 +612,7 @@ def upsert_instance(conn: sqlite3.Connection, instance: ItemInstance) -> ItemIns
             instance.space_id, instance.location, instance.quantity,
             instance.remaining_pct, instance.buy_date, instance.expire_date,
             1 if instance.is_opened else 0, instance.opened_date, instance.pao_days,
-            instance.final_expiry_date, instance.belongs_to_slot_id,
+            instance.final_expiry_date, instance.remark, instance.belongs_to_slot_id,
             instance.last_modified_by,
         ),
     )
@@ -611,6 +633,7 @@ def _row_to_instance(row: sqlite3.Row) -> ItemInstance:
         opened_date=row["opened_date"],
         pao_days=row["pao_days"],
         final_expiry_date=row["final_expiry_date"],
+        remark=row["remark"],
         belongs_to_slot_id=row["belongs_to_slot_id"],
         last_modified_by=row["last_modified_by"],
         created_at=row["created_at"] or "",
@@ -677,7 +700,7 @@ def join_all_items(conn: sqlite3.Connection) -> list[Item]:
                   inst.instance_id, inst.space_id, inst.location,
                   inst.quantity, inst.remaining_pct, inst.buy_date,
                   inst.expire_date, inst.is_opened, inst.opened_date,
-                  inst.pao_days, inst.final_expiry_date,
+                  inst.pao_days, inst.final_expiry_date, inst.remark,
                   inst.belongs_to_slot_id, inst.last_modified_by
            FROM item_instances inst
            JOIN skus sku ON inst.sku_id = sku.sku_id
@@ -717,6 +740,7 @@ def _join_row_to_item(row: sqlite3.Row) -> Item:
         openedDate=row["opened_date"],
         paoDays=row["pao_days"],
         finalExpiryDate=row["final_expiry_date"],
+        remark=row["remark"],
         belongsToSlotId=row["belongs_to_slot_id"],
         skuId=row["sku_id"],
         instanceId=row["instance_id"],
@@ -1033,10 +1057,11 @@ def delete_pending_confirmation(conn: sqlite3.Connection, pending_id: str) -> bo
     return cur.rowcount > 0
 
 
-def get_conversation_state(conn: sqlite3.Connection) -> dict:
+def get_conversation_state(conn: sqlite3.Connection, user_id: str = "default_user") -> dict:
     """Load the persistent conversation state."""
     row = conn.execute(
-        "SELECT interaction_mode, pending_item_selection, pending_operation, last_added_item, current_context_item FROM conversation_state WHERE id = 1"
+        "SELECT interaction_mode, pending_item_selection, pending_operation, last_added_item, current_context_item FROM conversation_states WHERE user_id = ?",
+        (user_id,),
     ).fetchone()
     return {
         "interaction_mode": row["interaction_mode"] if row else "normal",
@@ -1054,18 +1079,20 @@ def save_conversation_state(
     pending_operation: dict | None = None,
     last_added_item: dict | None = None,
     current_context_item: dict | None = None,
+    user_id: str = "default_user",
 ) -> None:
     """Save the persistent conversation state."""
     conn.execute(
-        """INSERT INTO conversation_state(id, interaction_mode, pending_item_selection, pending_operation, last_added_item, current_context_item)
-           VALUES(1, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET
+        """INSERT INTO conversation_states(user_id, interaction_mode, pending_item_selection, pending_operation, last_added_item, current_context_item)
+           VALUES(?, ?, ?, ?, ?, ?)
+           ON CONFLICT(user_id) DO UPDATE SET
                interaction_mode=excluded.interaction_mode,
                pending_item_selection=excluded.pending_item_selection,
                pending_operation=excluded.pending_operation,
                last_added_item=excluded.last_added_item,
                current_context_item=excluded.current_context_item""",
         (
+            user_id,
             interaction_mode,
             json.dumps(pending_item_selection, ensure_ascii=False) if pending_item_selection else None,
             json.dumps(pending_operation, ensure_ascii=False) if pending_operation else None,

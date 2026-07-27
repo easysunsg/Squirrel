@@ -186,6 +186,7 @@ class ItemInstance(BaseModel):
     opened_date: Optional[datetime] = Field(None, description="开封时间")
     pao_days: Optional[int] = Field(None, description="PAO相对开封有效天数")
     final_expiry_date: Optional[datetime] = Field(None, description="通过公式算出的最终截止日")
+    remark: Optional[str] = Field(None, description="该库存批次的备注")
 
     # 协同与审计日志
     last_modified_by: str = Field(..., description="最后一次移动/消耗该物品的用户ID")

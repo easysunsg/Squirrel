@@ -362,8 +362,9 @@ def parse_lightning_text(text: str) -> list[Item]:
     space_id, space_name = guess_space(text)
     location_match = re.search(r"放(?:在|进|到)?了?(.+?)(?:里|中|$)", text)
     location = location_match.group(1).strip(" ，,。") if location_match else "默认层架"
+    location = re.sub(r"[了吧呢]+$", "", location).strip() or "默认层架"
     item_text = re.sub(r"(?:，|,)?\s*(?:都)?放(?:在|进|到)?.*$", "", text)
-    item_text = re.sub(r"^(?:我今天|今天|刚刚|刚才)?(?:在[^\s,，买了购入新增存入录入添加]+?)?\s*(?:买了|购入|新增|存入|录入|添加)了?", "", item_text).strip() or text
+    item_text = re.sub(r"^(?:我)?(?:今天|刚刚|刚才|刚)?(?:在[^\s,，买了购入新增存入录入添加]+?)?\s*(?:买了|购入|新增|存入|录入|添加)了?", "", item_text).strip() or text
     parts = [part.strip() for part in re.split(r"[、和]", item_text) if part.strip()]
 
     consumed = bool(re.search(r"吃完|用完|扔|坏了|清掉|消耗", text))

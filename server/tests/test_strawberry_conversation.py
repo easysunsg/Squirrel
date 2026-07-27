@@ -89,12 +89,9 @@ def test_strawberry_followup_conversation_updates_one_batch(client: TestClient) 
     assert pending_items[0]["unit"] == "盒"
     assert pending_items[0]["location"] == "冰箱冷藏层"
 
-    confirm_response = client.post(
-        "/api/chat/confirm",
-        json={"pendingId": add_result["pendingId"], "items": pending_items},
-    )
-    assert confirm_response.status_code == 200
-    assert "草莓×2盒" in confirm_response.json()["messages"][-1]["text"]
+    confirm_result = _chat(client, "确认")
+    assert confirm_result["needsConfirmation"] is False
+    assert "已确认入库：草莓 2盒" in confirm_result["reply"]
 
     remark_result = _chat(client, "每盒大概有500克，你把备注加上")
     assert "草莓" in remark_result["reply"]
@@ -106,12 +103,15 @@ def test_strawberry_followup_conversation_updates_one_batch(client: TestClient) 
     assert expected_expiry in expiry_result["reply"]
 
     search_result = _chat(client, "帮我看看冷藏层里还有别的盘装生鲜吗？")
+    assert search_result["reply"] == "冷藏层里除了「草莓」，没有找到其他盘装生鲜。"
     assert "胡萝卜" not in search_result["reply"]
     assert "牛奶" not in search_result["reply"]
 
     consume_result = _chat(client, "知道了，草莓洗一盒下午吃")
     assert "草莓" in consume_result["reply"]
-    assert "1盒" in consume_result["reply"]
+    assert consume_result["needsConfirmation"] is True
+    consume_confirm_result = _chat(client, "1")
+    assert consume_confirm_result["needsConfirmation"] is False
 
     items = client.get("/api/items").json()["items"]
     strawberry = next(item for item in items if item["title"] == "草莓")
@@ -121,3 +121,15 @@ def test_strawberry_followup_conversation_updates_one_batch(client: TestClient) 
     assert strawberry["expireDate"] == expected_expiry
     assert milk_after["expireDate"] == milk_before["expireDate"]
     assert milk_after["remark"] == milk_before["remark"]
+
+
+def test_add_can_be_cancelled_through_chat(client: TestClient) -> None:
+    add_result = _chat(client, "我刚买了两盒草莓，放进冰箱冷藏层了")
+    assert add_result["needsConfirmation"] is True
+
+    cancel_result = _chat(client, "取消")
+    assert cancel_result["needsConfirmation"] is False
+    assert cancel_result["reply"] == "已取消入库。"
+
+    items = client.get("/api/items").json()["items"]
+    assert not any(item["title"] == "草莓" for item in items)

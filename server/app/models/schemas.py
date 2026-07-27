@@ -207,6 +207,11 @@ class TextRequest(BaseModel):
     text: str
 
 
+class ChatConfirmation(BaseModel):
+    decision: Literal["confirm", "cancel"]
+    items: list[Item] = Field(default_factory=list)
+
+
 class ChatRequest(BaseModel):
     chatHistory: list[Message] = Field(
         default_factory=list,
@@ -219,6 +224,7 @@ class ChatRequest(BaseModel):
     # === 多租户身份 ===
     userId: str = "default_user"
     userName: str = "主人"
+    confirmation: ChatConfirmation | None = None
 
 
 class RecipeRequest(BaseModel):

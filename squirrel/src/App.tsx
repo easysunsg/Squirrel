@@ -243,7 +243,7 @@ export default function App() {
     pendingConsumeRef.current = value;
     setPendingConsume(value);
   };
-  const handleSendChatMessageRef = useRef<(text: string) => Promise<void>>(async () => {});
+  const handleSendChatMessageRef = useRef<(text: string, confirmationItems?: PendingItem[]) => Promise<void>>(async () => {});
 
   useEffect(() => {
     const loadInitialState = async () => {
@@ -406,7 +406,7 @@ export default function App() {
     setMessages((currentMessages) => [...currentMessages, message]);
   };
 
-  const handleSendChatMessage = async (text: string) => {
+  const handleSendChatMessage = async (text: string, confirmationItems?: PendingItem[]) => {
     const userMessage = createChatMessage("user", text);
     const nextMessages = [...messages, userMessage];
 
@@ -430,6 +430,9 @@ export default function App() {
           locations: settings.selectedLocations,
           userId: "default_user",
           userName: "主人",
+          confirmation: confirmationItems
+            ? { decision: "confirm", items: confirmationItems }
+            : undefined,
         }),
       });
 
@@ -493,9 +496,9 @@ export default function App() {
       }
 
       // Handle needsConfirmation — show confirm modal, don't persist items yet
-      if (data.needsConfirmation && data.pendingId && data.itemSuggestion?.items) {
+      if (data.needsConfirmation && data.itemSuggestion?.items) {
         setPendingConfirm({
-          pendingId: data.pendingId,
+          pendingId: data.pendingId || "",
           items: data.itemSuggestion.items,
         });
         if (Array.isArray(data.messages)) {
@@ -579,33 +582,20 @@ export default function App() {
   const handleConsumeSelectionRef = useRef<(text: string) => Promise<boolean>>(async () => false);
   handleConsumeSelectionRef.current = handleConsumeSelection;
 
-  const handleConfirmItems = async (pendingId: string, confirmedItems: PendingItem[]) => {
+  const handleConfirmItems = async (_pendingId: string, confirmedItems: PendingItem[]) => {
     setChatError(null);
     try {
-      const response = await fetch("/api/chat/confirm", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pendingId, items: confirmedItems }),
-      });
-
-      if (!response.ok) {
-        const errorBody = await response.json().catch(() => null);
-        throw new Error(errorBody?.detail || `Confirm failed: ${response.status}`);
-      }
-
-      const data = await response.json();
-      if (Array.isArray(data.items)) {
-        const serverItems = normalizeServerItems(data.items);
-        saveItemsToStorage(serverItems);
-      }
-      if (Array.isArray(data.messages)) {
-        setMessages(normalizeMessageList(data.messages));
-      }
       setPendingConfirm(null);
+      await handleSendChatMessageRef.current("确认", confirmedItems);
     } catch (error) {
       console.error("Failed to confirm items", error);
       setChatError("确认入库失败，请重试。");
     }
+  };
+
+  const handleCancelItems = () => {
+    setPendingConfirm(null);
+    void handleSendChatMessageRef.current("取消");
   };
 
   const handleClearChatHistory = async () => {
@@ -819,7 +809,7 @@ export default function App() {
                     pendingId={pendingConfirm.pendingId}
                     items={pendingConfirm.items}
                     onConfirm={handleConfirmItems}
-                    onCancel={() => setPendingConfirm(null)}
+                    onCancel={handleCancelItems}
                   />
                 )}
               </>

@@ -77,7 +77,12 @@ def _is_pronoun_or_garbage_target(target: str) -> bool:
     return False
 
 
-def match_search_items(text: str, inventory: list[Item], exclude_item_id: str | None = None) -> list[Item]:
+def match_search_items(
+    text: str,
+    inventory: list[Item],
+    exclude_item_id: str | None = None,
+    exclude_title: str | None = None,
+) -> list[Item]:
     location_terms = [term for term in ("冷藏层", "冷冻层", "冰箱上层", "冰箱下层", "冰箱中层") if term in text]
     requires_food = any(term in text for term in ("生鲜", "食材", "食品", "水果", "蔬菜"))
     requires_plated = "盘装" in text
@@ -85,11 +90,14 @@ def match_search_items(text: str, inventory: list[Item], exclude_item_id: str | 
     def within_constraints(item: Item) -> bool:
         if exclude_item_id and item.id == exclude_item_id:
             return False
+        if exclude_title and item.title == exclude_title:
+            return False
         if location_terms and not any(term in item.location for term in location_terms):
             return False
         if requires_food and item.category != "food":
             return False
-        if requires_plated and "盘" not in " ".join([item.remark or "", *item.tags]):
+        plated_haystack = " ".join([item.title, item.unit, item.remark or "", *item.tags])
+        if requires_plated and "盘" not in plated_haystack:
             return False
         return True
 

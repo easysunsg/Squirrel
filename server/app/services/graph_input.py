@@ -317,7 +317,7 @@ def route_after_input(state: ExtendedGraphState) -> Literal["go_to_confirm_handl
     if reply_text and "已经帮您取消了刚才的操作" in reply_text:
         return "end_early"
     # 通过 state_updates 重置了 pending → 走正常意图分类
-    if state.get("interaction_mode") == "pending_selection":
+    if state.get("interaction_mode") in ("pending_selection", "pending_confirm"):
         logger.info("[Input Router] 有事务挂起 -> 流向 Confirm Handler")
         return "go_to_confirm_handler"
     logger.info("[Input Router] 正常新输入 -> 流向 Intent Classifier")
@@ -451,6 +451,19 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
     inventory = state.get("inventory", [])
     last_added = state.get("last_added_item")
     current_context = state.get("current_context_item")
+
+    is_constrained_search = (
+        any(phrase in text for phrase in ("还有别的", "有没有别的", "还有其他", "有没有其他"))
+        and any(term in text for term in ("冷藏层", "冷冻层", "冰箱", "生鲜", "食材", "食品", "水果", "蔬菜", "盘装"))
+    )
+    if is_constrained_search:
+        return {
+            "intent": "search_query",
+            "reply_text": "正在帮你搜索相关库存。",
+            "extracted_entities": {},
+            "last_added_item": last_added,
+            "current_context_item": current_context,
+        }
 
     followup = _resolve_inventory_followup(text, last_added, current_context, inventory)
     if followup:

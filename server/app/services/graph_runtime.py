@@ -292,8 +292,9 @@ def build_squirrel_graph():
         },
     )
 
-    # mutation_executor → tool_executor
-    graph.add_edge("mutation_executor", "tool_executor")
+    # Confirmation execution already produces mutation logs; validate it
+    # directly instead of executing the same operation a second time.
+    graph.add_edge("mutation_executor", "result_validator")
 
     # query_handler → response_generator (查询类不需要 ToolExecutor)
     graph.add_edge("query_handler", "response_generator")
@@ -370,14 +371,12 @@ def extended_to_old_dict(state: ExtendedGraphState, inventory: list[Item] | None
         patch_data = log.get("patch")
 
         if op_type == "add":
-            # 从 pending_add_items 或 mutation_log 构造 Item
             item_data = log.get("item_data", {})
             if item_data:
                 item = Item.model_validate(item_data) if isinstance(item_data, dict) else item_data
-                db_ops["pending_add"].append(item)
+                db_ops["upsert_items"].append(item)
             else:
-                # 构造一个最小 Item
-                db_ops["pending_add"].append(Item(title=sku_title, count=abs(delta) if delta else 1))
+                db_ops["upsert_items"].append(Item(title=sku_title, count=abs(delta) if delta else 1))
 
         elif op_type == "update":
             target = next((it for it in inventory if it.id == instance_id), None)
@@ -413,26 +412,19 @@ def extended_to_old_dict(state: ExtendedGraphState, inventory: list[Item] | None
                 "context": {"consumeAll": pending_op.consume_all, "patch": pending_op.patch},
             }
 
-    # 从 state 中取 pending_add_items（mutation_executor 设置）
-    pending_add = state.get("pending_add_items", [])
-    if pending_add:
-        items = [Item.model_validate(i) if isinstance(i, dict) else i for i in pending_add]
-        db_ops["pending_add"] = items
-
     # --- 构建 chat_result ---
-    needs_confirm = (interaction_mode == "pending_selection") or bool(db_ops.get("pending_add") or db_ops.get("pending_consume"))
+    needs_confirm = interaction_mode in ("pending_selection", "pending_confirm") or bool(db_ops.get("pending_consume"))
+
+    item_suggestion = None
+    if interaction_mode == "pending_confirm" and pending_op and pending_op.type == "add":
+        item_suggestion = {"items": pending_selection}
 
     chat_result = ChatResult(
         intent=intent,
         replyText=reply_text,
         needsConfirmation=needs_confirm,
+        itemSuggestion=item_suggestion,
     )
-
-    # 有 mutation_logs → 已确认操作（兼容旧 confirmed 路径）
-    if mutation_logs:
-        chat_result.confirmedItemId = mutation_logs[0].get("target_instance_id", "auto-confirmed")
-        if len(mutation_logs) > 1:
-            chat_result.confirmedItemIds = [log.get("target_instance_id", "") for log in mutation_logs if log.get("target_instance_id")]
 
     # --- 构建其他透传字段 ---
     return {
@@ -533,9 +525,9 @@ def run_squirrel_graph(
     if pending_operation:
         pop = PendingOperation(
             type=pending_operation.get("type", "consume"),
-            target_sku_title=pending_operation.get("target", ""),
+            target_sku_title=pending_operation.get("target_sku_title") or pending_operation.get("target", ""),
             patch=pending_operation.get("patch", {}),
-            consume_all=pending_operation.get("consumeAll", False),
+            consume_all=pending_operation.get("consume_all", pending_operation.get("consumeAll", False)),
             source_batch_ids=pending_operation.get("source_batch_ids", []),
         )
 
@@ -560,7 +552,7 @@ def run_squirrel_graph(
         ),
         "intent": "",
         "extracted_entities": {},
-        "interaction_mode": interaction_mode if interaction_mode == "pending_selection" else "normal",
+        "interaction_mode": interaction_mode if interaction_mode in ("pending_selection", "pending_confirm") else "normal",
         "current_context_item": current_context_item,
         "pending_item_selection": pending_item_selection or [],
         "pending_operation": pop,

@@ -285,12 +285,23 @@ def _process_chat(request: ChatRequest) -> dict:
         inventory = join_all_items(conn)
 
         # === 加载持久化的跨轮次状态 ===
-        conv_state = get_conversation_state(conn)
+        conv_state = get_conversation_state(conn, request.userId)
         interaction_mode = conv_state["interaction_mode"]
         pending_selection = conv_state["pending_item_selection"]
         pending_operation = conv_state.get("pending_operation")
         last_added_item = conv_state.get("last_added_item")
         current_context_item = conv_state.get("current_context_item")
+
+        if request.confirmation and pending_operation:
+            latest = "确认" if request.confirmation.decision == "confirm" else "取消"
+            if request.confirmation.items and pending_operation.get("type") == "add":
+                pending_operation = {
+                    **pending_operation,
+                    "patch": {
+                        **(pending_operation.get("patch") or {}),
+                        "items_data": [item.model_dump() for item in request.confirmation.items],
+                    },
+                }
 
         # === 将完整状态注入 graph（所有业务逻辑都在 graph 中执行） ===
         graph_result = ai_service.chat(
@@ -327,10 +338,39 @@ def _process_chat(request: ChatRequest) -> dict:
         new_operation = graph_result.get("pending_operation") or None
         new_last_added = graph_result.get("last_added_item") if "last_added_item" in graph_result else last_added_item
         new_context_item = graph_result.get("current_context_item") if "current_context_item" in graph_result else current_context_item
-        save_conversation_state(conn, new_mode, new_selection, new_operation, new_last_added, new_context_item)
+        save_conversation_state(
+            conn,
+            new_mode,
+            new_selection,
+            new_operation,
+            new_last_added,
+            new_context_item,
+            user_id=request.userId,
+        )
 
         # === 物化 DB 操作（纯数据管道，无业务逻辑） ===
         updated_items, pending_id, pending_items = _materialize_db_operations(conn, db_ops)
+
+        if updated_items and chat_result.intent == "add":
+            created = updated_items[-1]
+            new_last_added = created.model_dump()
+            new_context_item = {
+                "id": created.id,
+                "title": created.title,
+                "location": created.location,
+                "spaceName": created.spaceName,
+                "count": created.count,
+                "unit": created.unit,
+            }
+            save_conversation_state(
+                conn,
+                "normal",
+                None,
+                None,
+                new_last_added,
+                new_context_item,
+                user_id=request.userId,
+            )
 
         if chat_result.confirmedItemIds or chat_result.confirmedItemId is not None:
             # confirmed 路径：已有 replyText，构造确认消息
@@ -360,7 +400,10 @@ def _process_chat(request: ChatRequest) -> dict:
                 consume_ctx = db_ops["pending_consume"].get("context", {})
                 chat_result.itemSuggestion = {
                     "pendingId": pending_id,
-                    "matches": list(pending_items),
+                    "matches": [
+                        item.model_dump() if isinstance(item, BaseModel) else item
+                        for item in pending_items
+                    ],
                     "consumeAll": consume_ctx.get("consumeAll", False),
                 }
             elif chat_result.itemSuggestion:
@@ -402,6 +445,7 @@ def _process_chat(request: ChatRequest) -> dict:
 
     return {
         "reply": chat_result.replyText,
+        "needsConfirmation": chat_result.needsConfirmation,
         "itemSuggestion": chat_result.itemSuggestion,
         "messages": full_history,
         "items": state.items,

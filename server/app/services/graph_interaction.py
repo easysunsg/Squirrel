@@ -96,16 +96,21 @@ def conflict_batch_resolver_node(state: ExtendedGraphState) -> Dict[str, Any]:
     # ----- ADD 意图 -----
     if intent == "add":
         items_data = entities.get("items", [])
-        # 创建 PendingOperation 供 mutation_executor 使用
-        add_count = float(entities.get("item_count", 1))
+        total_count = sum(float(item.get("count", 1)) for item in items_data if isinstance(item, dict))
         pending_op = PendingOperation(
             type="add",
             target_sku_title=target_name,
-            patch={"count": add_count, "items_data": items_data},
+            patch={"count": total_count or 1, "items_data": items_data},
+        )
+        summary = "、".join(
+            f"{item.get('title', target_name)} {item.get('count', 1)}{item.get('unit', '件')}，存放在{item.get('location', '默认层架')}"
+            for item in items_data if isinstance(item, dict)
         )
         return {
+            "interaction_mode": "pending_confirm",
+            "pending_item_selection": items_data,
             "pending_operation": pending_op,
-            "reply_text": state.get("reply_text", ""),
+            "reply_text": f"识别到：{summary}。确认入库吗？请回复「确认」或「取消」。",
         }
 
     # ----- CONSUME / REMOVE 意图 -----
@@ -187,7 +192,7 @@ def conflict_batch_resolver_node(state: ExtendedGraphState) -> Dict[str, Any]:
 def route_after_resolver(state: ExtendedGraphState) -> Literal["execute", "pending"]:
     """【条件路由】clean → mutation_executor / pending → post_process。"""
     mode = state.get("interaction_mode", "normal")
-    if mode == "pending_selection":
+    if mode in ("pending_selection", "pending_confirm"):
         return "pending"
     return "execute"
 
@@ -202,6 +207,31 @@ def confirm_subgraph_handler_node(state: ExtendedGraphState) -> Dict[str, Any]:
     selection = state.get("pending_item_selection", [])
     pending_op = state.get("pending_operation")
     inventory = state.get("inventory", [])
+
+    if state.get("interaction_mode") == "pending_confirm":
+        cancel_keywords = {"取消", "退出", "算了", "不要了", "不入库"}
+        if any(keyword in text for keyword in cancel_keywords):
+            return {
+                "interaction_mode": "normal",
+                "pending_item_selection": [],
+                "pending_operation": None,
+                "reply_text": "已取消入库。",
+            }
+        confirm_keywords = {"确认", "确定", "入库", "确认入库", "没问题", "可以"}
+        if text not in confirm_keywords:
+            return {
+                "interaction_mode": "pending_confirm",
+                "pending_item_selection": selection,
+                "pending_operation": pending_op,
+                "reply_text": "请回复「确认」完成入库，或回复「取消」。",
+            }
+        return {
+            "intent": pending_op.type if pending_op else "chat",
+            "interaction_mode": "normal",
+            "pending_item_selection": [],
+            "pending_operation": pending_op,
+            "reply_text": "",
+        }
 
     if not text:
         return {
@@ -355,7 +385,7 @@ def confirm_subgraph_handler_node(state: ExtendedGraphState) -> Dict[str, Any]:
 def route_after_confirm(state: ExtendedGraphState) -> Literal["success", "cancel"]:
     """【条件路由】确认成功 → mutation_executor / 取消 → post_process。"""
     mode = state.get("interaction_mode", "normal")
-    if mode == "pending_selection":
+    if mode in ("pending_selection", "pending_confirm"):
         return "cancel"  # 保持在 pending_selection -> post_process 刷新状态
     return "success"
 
@@ -378,6 +408,8 @@ def mutation_executor_node(state: ExtendedGraphState) -> Dict[str, Any]:
     new_logs: List[Dict[str, Any]] = []
     reply_text = state.get("reply_text", "")
     pending_add_items: List[Dict[str, Any]] = []  # 用于返回给 adapter 层
+    next_last_added = state.get("last_added_item")
+    next_context_item = state.get("current_context_item")
     # --- 处理来自 confirm_handler 的单选 ID ---
     if confirmed_item_id and confirmed_patch:
         # update 操作：通过 patch 直接修改
@@ -458,10 +490,24 @@ def mutation_executor_node(state: ExtendedGraphState) -> Dict[str, Any]:
                 "timestamp": datetime.now().isoformat(),
             })
         if not reply_text:
-            reply_text = f"登记成功！已帮您将物品录入系统。"
+            summary = "、".join(
+                f"{item.get('title', pending_op.target_sku_title)} {item.get('count', 1)}{item.get('unit', '件')}"
+                for item in items_data
+            )
+            reply_text = f"已确认入库：{summary}。"
 
         # 🚨 修复：不直接修改 state，而是将增量数据放入返回字典，让 LangGraph 统一调度更新
         pending_add_items = items_data
+        if items_data:
+            next_last_added = items_data[-1]
+            next_context_item = {
+                "id": items_data[-1].get("id"),
+                "title": items_data[-1].get("title", pending_op.target_sku_title),
+                "location": items_data[-1].get("location", "默认层架"),
+                "spaceName": items_data[-1].get("spaceName", ""),
+                "count": items_data[-1].get("count", 1),
+                "unit": items_data[-1].get("unit", "件"),
+            }
 
     elif pending_op.type in ("consume", "remove"):
         deduct_count = pending_op.patch.get("deductCount", 1.0)
@@ -496,6 +542,8 @@ def mutation_executor_node(state: ExtendedGraphState) -> Dict[str, Any]:
         "pending_item_selection": [],
         "reply_text": reply_text,
         "pending_add_items": pending_add_items,
+        "last_added_item": next_last_added,
+        "current_context_item": next_context_item,
     }
 
 
@@ -574,9 +622,21 @@ def query_handler_node(state: ExtendedGraphState) -> Dict[str, Any]:
     if intent == "search_query":
         text = state.get("raw_text_input", "")
         exclude_id = current_context.get("id") if "别的" in text and current_context else None
-        results = match_search_items(text, inventory, exclude_item_id=exclude_id)
+        exclude_title = current_context.get("title") if "别的" in text and current_context else None
+        results = match_search_items(
+            text,
+            inventory,
+            exclude_item_id=exclude_id,
+            exclude_title=exclude_title,
+        )
         if not results:
-            return {"reply_text": "没有找到匹配的物品。"}
+            location = next(
+                (term for term in ("冷藏层", "冷冻层", "冰箱上层", "冰箱下层", "冰箱中层") if term in text),
+                "库存",
+            )
+            category = "盘装生鲜" if "盘装" in text and "生鲜" in text else "符合条件的物品"
+            excluded = f"除了「{exclude_title}」，" if exclude_title else ""
+            return {"reply_text": f"{location}里{excluded}没有找到其他{category}。"}
         summary = "、".join(f"{item.title}（{item.spaceName}/{item.location}）" for item in results[:6])
         return {"reply_text": f"搜索到以下物品：{summary}。"}
 
