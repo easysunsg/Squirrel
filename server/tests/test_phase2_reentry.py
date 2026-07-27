@@ -164,6 +164,7 @@ class TestReEntryRouter:
 
     def test_route_resume_when_snapshot_exists(self):
         from app.services.graph import re_entry_router_node, route_after_reentry
+        from app.models.state import UserContext
 
         # Use a unique session to avoid cross-test contamination
         test_session = "test-session-resume"
@@ -196,38 +197,42 @@ class TestReEntryRouter:
             found = get_active_snapshot(conn, test_session)
         assert found is not None, "Snapshot should exist for test session"
 
-        # The re_entry_router checks default_session, not our test session
-        # So it won't find the snapshot we just created
-        state = {"raw_text_input": "确认", "interaction_mode": "normal"}
+        state = {
+            "raw_text_input": "确认",
+            "interaction_mode": "normal",
+            "current_user": UserContext(user_id=test_session, user_name="test"),
+        }
         result = re_entry_router_node(state)
+        assert result.get(_REENTRY_SHARED_FLAG) is True
+        assert result["interaction_mode"] == "pending_selection"
+        assert result["pending_item_selection"][0]["id"] == "item-1"
 
         # Check that the route function works correctly
         state_with_flag = {**state, _REENTRY_SHARED_FLAG: True}
         assert route_after_reentry(state_with_flag) == "resume"
 
-        # Cleanup
+        # Restoring a continuation consumes it.
         with connect() as conn:
-            delete_snapshot(conn, snapshot_id)
             found = get_active_snapshot(conn, test_session)
         assert found is None, "Snapshot should be deleted"
 
-    def test_route_snapshot_found_in_default_session(self):
-        """Test that re_entry_router finds a snapshot for default_session."""
+    def test_route_snapshot_found_for_default_user(self):
+        """Test that re_entry_router scopes snapshots to the current user."""
         from app.services.graph import re_entry_router_node, route_after_reentry
 
         snapshot_id = f"snap_{uuid4().hex[:12]}"
 
-        # Create a snapshot for default_session
+        # Create a snapshot for the default API user.
         with connect() as conn:
             # First clean up any existing snapshot
-            existing = get_active_snapshot(conn, "default_session")
+            existing = get_active_snapshot(conn, "default_user")
             if existing:
                 delete_snapshot(conn, existing["snapshot_id"])
             # Create our test snapshot
             save_snapshot(
                 conn,
                 snapshot_id,
-                "default_session",
+                "default_user",
                 1,
                 {
                     "is_suspended": True,
@@ -249,9 +254,9 @@ class TestReEntryRouter:
         state_with_flag = {**state, _REENTRY_SHARED_FLAG: True}
         assert route_after_reentry(state_with_flag) == "resume"
 
-        # Cleanup
+        # The router consumed the snapshot.
         with connect() as conn:
-            delete_snapshot(conn, snapshot_id)
+            assert get_active_snapshot(conn, "default_user") is None
 
 
 # ====================================================================

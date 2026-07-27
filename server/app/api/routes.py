@@ -305,6 +305,9 @@ def _process_chat(request: ChatRequest) -> dict:
             current_user_name=request.userName,
         )
         chat_result = graph_result.get("chat_result", ChatResult())
+        if not chat_result.replyText.strip():
+            logger.warning("Graph returned an empty chat reply; using fallback")
+            chat_result.replyText = "收到，管家已为您处理完毕。"
         db_ops = graph_result.get("db_operations", {})
 
         # === 冲突检测（在物化之前执行） ===
