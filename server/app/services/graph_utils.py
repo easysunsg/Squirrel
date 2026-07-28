@@ -7,10 +7,12 @@
 - 所有路径收敛到 post_process，消灭直通 END 的叶子节点
 """
 
+import json
 import logging
 from datetime import date, datetime
 
 from app.models.schemas import Item
+from app.services.llm import llm_service
 from app.services.spatial_service import spatial_service
 from app.services.temperature import _check_temperature_zone
 from app.services.vector_store import vector_store
@@ -67,13 +69,15 @@ def match_search_items(
             return False
         if exclude_title and item.title == exclude_title:
             return False
+        if constraints.exclude and any(name in item.title for name in constraints.exclude):
+            return False
         # Location constraints are mandatory; semantic resolution supplements text matching.
         if constraints.location_hint:
             location_text = f"{item.spaceName} {item.location}"
             hint = constraints.location_hint
             slot_ids = spatial_service.resolve_location_to_slots(hint)
-            textual_match = hint in location_text or (
-                hint == "柜子" and any(word in location_text for word in ("柜", "橱柜"))
+            textual_match = hint in location_text or location_text.strip() in hint or (
+                "柜" in hint and "柜" in location_text
             )
             slot_match = bool(item.belongsToSlotId and item.belongsToSlotId in slot_ids)
             if not textual_match and not slot_match:
@@ -123,8 +127,24 @@ BEVERAGE_TERMS = (
 )
 
 
-def extract_search_constraints(text: str) -> SearchConstraints:
-    """Extract the small, safety-critical set of inventory search constraints."""
+SEARCH_CONSTRAINTS_PROMPT = """你是家庭库存搜索约束提取器。请从用户话语中提取搜索条件。
+
+只返回一个 JSON 对象，字段必须符合以下定义：
+- keyword: 真正要搜索的物品名；如果用户只问类别，可以填写类别词
+- location_hint: 原文中的位置描述，例如“冰箱冷藏层”“柜子”；没有则为空字符串
+- category: food、beverage、daily、medicine、other 之一；无法判断则为空字符串
+- temperature_zone: cold、frozen、room、any 之一
+- attributes: 其他必须满足的属性，例如“盘装”“大瓶”“快过期”
+- exclude: 用户明确要求排除的物品名称；没有则为空数组
+
+不要放宽用户明确提出的位置、类别和属性条件。
+
+用户话语：{text}
+"""
+
+
+def _extract_search_constraints_fallback(text: str) -> SearchConstraints:
+    """Deterministic fallback used when the configured model cannot extract constraints."""
     location = next(
         (term for term in ("冷藏层", "冷冻层", "冰箱上层", "冰箱下层", "冰箱中层", "柜子") if term in text),
         "",
@@ -151,6 +171,28 @@ def extract_search_constraints(text: str) -> SearchConstraints:
         temperature_zone=temperature,
         attributes=attributes,
     )
+
+
+def extract_search_constraints(text: str) -> SearchConstraints:
+    """Use the configured LLM first, with deterministic parsing as a safe fallback."""
+    if not llm_service.enabled:
+        return _extract_search_constraints_fallback(text)
+
+    try:
+        raw = llm_service.extract_raw_json(
+            [{"role": "user", "content": SEARCH_CONSTRAINTS_PROMPT.format(text=text)}],
+            response_format={"type": "json_object"},
+        )
+        payload = json.loads(raw)
+        constraints = SearchConstraints.model_validate(payload)
+        if constraints.temperature_zone not in {"cold", "frozen", "room", "any"}:
+            constraints.temperature_zone = "any"
+        if constraints.category not in {"", "food", "beverage", "daily", "medicine", "other"}:
+            constraints.category = ""
+        return constraints
+    except Exception:
+        logger.exception("LLM search constraint extraction failed; using deterministic fallback")
+        return _extract_search_constraints_fallback(text)
 
 
 def _match_items_3tier(inventory: list[Item], target: str | None) -> list[Item]:
