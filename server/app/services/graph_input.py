@@ -452,9 +452,37 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
     last_added = state.get("last_added_item")
     current_context = state.get("current_context_item")
 
+    if any(term in text for term in ("采购清单", "购物清单", "待购清单")) and any(
+        term in text for term in ("加入", "加到", "加上", "添加")
+    ):
+        import re as re_mod
+
+        title_match = re_mod.search(r"把\s*(.+?)\s*(?:加入|加到|添加到)", text)
+        if not title_match:
+            title_match = re_mod.search(r"(?:加上|添加)\s*[\"“]?(.+?)[\"”]?(?:。|$)", text)
+        title = title_match.group(1).strip(" \"“”。，,") if title_match else ""
+        list_match = re_mod.search(r"((?:未来|周末|家庭|我们的)?(?:采购|购物|待购)清单)", text)
+        list_name = list_match.group(1) if list_match else "采购清单"
+        list_name = list_name.removeprefix("我们的")
+        return {
+            "intent": "shopping_add",
+            "reply_text": f"正在将「{title}」加入{list_name}。",
+            "extracted_entities": {
+                "target": title,
+                "list_name": list_name,
+                "count": 1,
+                "unit": "个",
+            },
+            "last_added_item": last_added,
+            "current_context_item": current_context,
+        }
+
     is_constrained_search = (
-        any(phrase in text for phrase in ("还有别的", "有没有别的", "还有其他", "有没有其他"))
-        and any(term in text for term in ("冷藏层", "冷冻层", "冰箱", "生鲜", "食材", "食品", "水果", "蔬菜", "盘装"))
+        (
+            any(phrase in text for phrase in ("还有别的", "有没有别的", "还有其他", "有没有其他"))
+            and any(term in text for term in ("冷藏层", "冷冻层", "冰箱", "柜", "生鲜", "食材", "食品", "水果", "蔬菜", "盘装", "饮料"))
+        )
+        or ("饮料" in text and any(term in text for term in ("什么", "还有", "还剩", "有没有")))
     )
     if is_constrained_search:
         return {

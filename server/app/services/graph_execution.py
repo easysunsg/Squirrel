@@ -138,7 +138,7 @@ def tool_executor_node(state: ExtendedGraphState) -> Dict[str, Any]:
 def _intent_to_capability(intent: str) -> str:
     """将 intent 映射到 capability 名称。"""
     mapping = {
-        "add": "inventory", "consume": "inventory", "remove": "inventory",
+        "add": "inventory", "shopping_add": "shopping", "consume": "inventory", "remove": "inventory",
         "update_location": "inventory", "update_expiry": "inventory", "update_remaining": "inventory",
         "update_remark": "inventory",
         "expiry_query": "expiration", "location_query": "inventory", "quantity_query": "inventory",

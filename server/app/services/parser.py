@@ -426,7 +426,7 @@ class IntentExtractionResult(BaseModel):
     """Structured output schema for LLM intent extraction."""
 
     intent: str = Field(
-        description="用户意图，只能取以下枚举值：add, consume, remove, update_location, "
+        description="用户意图，只能取以下枚举值：add, shopping_add, consume, remove, update_location, "
         "update_expiry, update_remark, quantity_query, query_total, location_query, expiry_query, "
         "idle_query, recipe, search_query, chat"
     )
@@ -463,7 +463,8 @@ INTENT_EXTRACT_PROMPT = """## 角色定位
 ## 意图枚举列表（必须严格从以下列表选择，按优先级判定）
 | 意图枚举值 | 意图定义 | 核心语义特征 |
 |---|---|---|
-| add | 新增/购买/录入物品到库存 | 包含购买、购入、新增、存入、录入、添加、囤货、采购、买回来等新增库存的语义 |
+| shopping_add | 添加商品到采购/购物清单，不代表已经拥有库存 | 包含加入采购清单、加入购物清单、采购清单加上等语义；优先级高于add |
+| add | 新增/购买/录入已经拥有的物品到库存 | 包含买回来、购入、存入、录入、囤货等新增库存的语义；明确提到采购清单时不得使用add |
 | consume | 消耗/使用/吃掉/喝掉物品，扣减库存数量 | 包含吃完、用完、用了、吃了、吃掉、喝了、消耗、用掉等使用消耗的语义，仅扣减数量，不删除整条记录 |
 | remove | 丢弃/清除/扔掉物品，删除整条库存记录 | 包含扔掉、扔了、丢弃、丢掉、清掉、删除、坏了扔掉、过期扔掉等移除整条记录的语义 |
 | update_location | 修改/移动物品的存放位置 | 包含换到、移到、挪到、放到、放进、放在、挪去、移去、转移到等修改位置的语义，无新增/购买语义 |

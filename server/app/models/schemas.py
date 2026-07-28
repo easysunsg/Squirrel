@@ -7,6 +7,7 @@ InventoryCategory = Literal["food", "medicine", "electronics", "cosmetics", "boo
 NodeType = Literal["Zone", "Fixture", "Container", "Slot"]
 ChatIntent = Literal[
     "add",
+    "shopping_add",
     "consume",
     "remove",
     "update_location",
@@ -113,6 +114,18 @@ class Item(BaseModel):
     belongsToSlotId: str | None = None
     skuId: str | None = None
     instanceId: str | None = None
+
+
+class ShoppingListItem(BaseModel):
+    id: str | None = None
+    listName: str = "采购清单"
+    title: str
+    count: int = Field(default=1, ge=1)
+    unit: str = "个"
+    addedBy: str = "default_user"
+    status: Literal["pending", "purchased", "cancelled"] = "pending"
+    createdAt: str | None = None
+    updatedAt: str | None = None
 
 
 class Message(BaseModel):

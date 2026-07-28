@@ -76,3 +76,4 @@ import app.services.capabilities.expiration  # noqa: F401, E402
 import app.services.capabilities.recommendation  # noqa: F401, E402
 import app.services.capabilities.batch  # noqa: F401, E402
 import app.services.capabilities.household  # noqa: F401, E402
+import app.services.capabilities.shopping  # noqa: F401, E402

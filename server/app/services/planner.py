@@ -53,6 +53,7 @@ def plan_actions(
 def _intent_to_capability(intent: str) -> str | None:
     mapping = {
         "add": "inventory",
+        "shopping_add": "shopping",
         "consume": "inventory",
         "remove": "inventory",
         "update_location": "inventory",

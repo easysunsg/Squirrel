@@ -61,7 +61,7 @@ def parameter_resolver_node(state: ExtendedGraphState) -> Dict[str, Any]:
 
     missing: List[str] = []
 
-    if intent in ("add",):
+    if intent in ("add", "shopping_add"):
         if not target and not items_data:
             missing.append("target_items")
 
@@ -425,6 +425,7 @@ def capability_router_node(state: ExtendedGraphState) -> Dict[str, Any]:
     # intent → capability 映射
     capability_map = {
         "add": "inventory",
+        "shopping_add": "shopping",
         "consume": "inventory",
         "remove": "inventory",
         "update_location": "inventory",
@@ -489,7 +490,7 @@ def _determine_risk_level(intent: str, entities: dict) -> str:
 def route_after_capability(state: ExtendedGraphState) -> Literal["mutation", "query"]:
     """【条件路由】mutation → 原有 mutation 路由 / query → 原有 query 路由。"""
     intent = state.get("intent", "chat")
-    if intent in ("add", "consume", "remove", "update_location", "update_expiry", "update_remark", "update_remaining"):
+    if intent in ("add", "shopping_add", "consume", "remove", "update_location", "update_expiry", "update_remark", "update_remaining"):
         return "mutation"
     return "query"
 

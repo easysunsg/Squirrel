@@ -133,3 +133,50 @@ def test_add_can_be_cancelled_through_chat(client: TestClient) -> None:
 
     items = client.get("/api/items").json()["items"]
     assert not any(item["title"] == "草莓" for item in items)
+
+
+def test_search_beverages_in_cabinet_applies_both_constraints(client: TestClient) -> None:
+    response = client.post(
+        "/api/items",
+        json={
+            "title": "橙汁",
+            "category": "food",
+            "location": "客厅柜子",
+            "count": 2,
+            "unit": "瓶",
+        },
+    )
+    assert response.status_code == 201
+
+    result = _chat(client, "那柜子里还剩什么饮料吗")
+    assert "橙汁" in result["reply"]
+    assert "草莓" not in result["reply"]
+    assert "胡萝卜" not in result["reply"]
+    assert "五金工具箱" not in result["reply"]
+
+
+def test_add_to_shopping_list_does_not_add_inventory(client: TestClient) -> None:
+    before = client.get("/api/items").json()["items"]
+
+    result = _chat(client, "把特仑苏加入我们的未来采购清单。")
+
+    assert result["reply"] == "已将「特仑苏」加入未来采购清单。"
+    assert result["needsConfirmation"] is False
+    after = client.get("/api/items").json()["items"]
+    assert len(after) == len(before)
+    assert not any(item["title"] == "特仑苏" for item in after)
+
+    from app.db.sqlite import connect
+
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT list_name, title, quantity, unit, status FROM shopping_list_items WHERE title = ?",
+            ("特仑苏",),
+        ).fetchone()
+    assert dict(row) == {
+        "list_name": "未来采购清单",
+        "title": "特仑苏",
+        "quantity": 1,
+        "unit": "个",
+        "status": "pending",
+    }

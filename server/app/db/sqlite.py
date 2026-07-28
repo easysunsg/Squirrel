@@ -187,6 +187,19 @@ def init_db() -> None:
                 current_context_item TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS shopping_list_items (
+                id TEXT PRIMARY KEY,
+                list_name TEXT NOT NULL DEFAULT '采购清单',
+                title TEXT NOT NULL,
+                quantity INTEGER NOT NULL DEFAULT 1,
+                unit TEXT NOT NULL DEFAULT '个',
+                added_by TEXT NOT NULL DEFAULT 'default_user',
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(list_name, title, status)
+            );
+
             CREATE TABLE IF NOT EXISTS skus (
                 sku_id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,

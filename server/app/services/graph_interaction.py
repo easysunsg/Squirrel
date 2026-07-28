@@ -113,6 +113,12 @@ def conflict_batch_resolver_node(state: ExtendedGraphState) -> Dict[str, Any]:
             "reply_text": f"识别到：{summary}。确认入库吗？请回复「确认」或「取消」。",
         }
 
+    if intent == "shopping_add":
+        return {
+            "interaction_mode": "normal",
+            "reply_text": state.get("reply_text", ""),
+        }
+
     # ----- CONSUME / REMOVE 意图 -----
     if intent in ("consume", "remove"):
         # 多义性消解
@@ -631,12 +637,18 @@ def query_handler_node(state: ExtendedGraphState) -> Dict[str, Any]:
         )
         if not results:
             location = next(
-                (term for term in ("冷藏层", "冷冻层", "冰箱上层", "冰箱下层", "冰箱中层") if term in text),
+                (term for term in ("冷藏层", "冷冻层", "冰箱上层", "冰箱下层", "冰箱中层", "柜子") if term in text),
                 "库存",
             )
-            category = "盘装生鲜" if "盘装" in text and "生鲜" in text else "符合条件的物品"
+            if "盘装" in text and "生鲜" in text:
+                category = "盘装生鲜"
+            elif "饮料" in text:
+                category = "饮料"
+            else:
+                category = "符合条件的物品"
             excluded = f"除了「{exclude_title}」，" if exclude_title else ""
-            return {"reply_text": f"{location}里{excluded}没有找到其他{category}。"}
+            other = "其他" if any(term in text for term in ("别的", "其他")) else ""
+            return {"reply_text": f"{location}里{excluded}没有找到{other}{category}。"}
         summary = "、".join(f"{item.title}（{item.spaceName}/{item.location}）" for item in results[:6])
         return {"reply_text": f"搜索到以下物品：{summary}。"}
 
