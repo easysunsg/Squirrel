@@ -25,7 +25,7 @@ from app.services.cache import get_recipe_cache, set_recipe_cache
 from app.services.llm import llm_service
 from app.services.markdown import item_status
 from app.services.parser import (
-    build_chat_result,
+    build_chat_result_by_rules,
     days_from_now,
     extract_expire_patch,
     extract_location_update,
@@ -662,7 +662,9 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
             logger.exception("LLM classification failed, falling back to rules")
 
     # Rule-based fallback
-    fallback = build_chat_result(text)
+    # The primary LLM classification has already been attempted above. Do not invoke a
+    # second intent model on failure; deterministic rules are the terminal fallback.
+    fallback = build_chat_result_by_rules(text)
     intent = fallback.intent
     entities: Dict[str, Any] = {}
     if fallback.operations:

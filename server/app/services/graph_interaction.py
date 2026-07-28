@@ -325,7 +325,8 @@ def confirm_subgraph_handler_node(state: ExtendedGraphState) -> Dict[str, Any]:
                 patch=(pending_op.patch if pending_op else {}),
                 source_batch_ids=[item_id] if item_id else [],
             ),
-            "reply_text": f"已确认选择：{sel.get('title', '')}。正在为您处理...",
+            # The executor owns the final outcome text after mutation logs are produced.
+            "reply_text": "",
         }
 
     # --- 多选 ---
@@ -510,6 +511,7 @@ def mutation_executor_node(state: ExtendedGraphState) -> Dict[str, Any]:
 
     elif pending_op.type in ("consume", "remove"):
         deduct_count = pending_op.patch.get("deductCount", 1.0)
+        affected_items: list[tuple[Item, int]] = []
 
         # 支持多选分摊模式（deductCounts）
         deduct_counts = pending_op.patch.get("deductCounts", {})
@@ -520,6 +522,8 @@ def mutation_executor_node(state: ExtendedGraphState) -> Dict[str, Any]:
                 actual_deduct = deduct_counts.get(batch_id, 1)
             elif isinstance(deduct_count, (int, float)):
                 actual_deduct = int(deduct_count)
+            if target:
+                affected_items.append((target, actual_deduct))
             new_logs.append({
                 "event_id": f"evt_{datetime.now().timestamp()}",
                 "op_type": pending_op.type,
@@ -532,7 +536,18 @@ def mutation_executor_node(state: ExtendedGraphState) -> Dict[str, Any]:
             })
 
         if not reply_text:
-            reply_text = f"好滴{user_name}，已帮您处理了 **{pending_op.target_sku_title}**。"
+            if pending_op.type == "remove" and affected_items:
+                summary = "、".join(
+                    f"「{item.title}」{item.count}{item.unit}" for item, _ in affected_items
+                )
+                reply_text = f"已从库存移除：{summary}。"
+            elif affected_items:
+                summary = "、".join(
+                    f"「{item.title}」{deduct}{item.unit}" for item, deduct in affected_items
+                )
+                reply_text = f"已扣减库存：{summary}。"
+            else:
+                reply_text = f"没有找到可处理的「{pending_op.target_sku_title}」。"
 
     return {
         "mutation_logs": new_logs,
@@ -648,6 +663,7 @@ def query_handler_node(state: ExtendedGraphState) -> Dict[str, Any]:
             inventory,
             exclude_item_id=exclude_id,
             exclude_title=exclude_title,
+            extracted_constraints=entities.get("search_constraints"),
         )
         if not results:
             location = next(

@@ -149,8 +149,8 @@ def chinese_numeral_to_int(text: str) -> tuple[int, str] | None:
 def extract_target_title(text: str) -> str | None:
     cleaned = text.strip(" ，,。！？?；;")
     patterns = [
-        r"把(.+?)(?:吃完|用完|扔掉|扔了|坏了|喝了一半|用了\d+个|用了\d+瓶|用了|换到|移到|挪到|放到|放进|放在)",
-        r"(.+?)(?:吃完了|用完了|扔掉了|坏了，?扔掉|坏了|喝了一半|用了\d+个|用了\d+瓶|用了|换到|移到|挪到|放到|放进|放在)",
+        r"把(.+?)(?:吃完|用完|扔掉|扔了|打碎|摔碎|坏了|喝了一半|用了\d+个|用了\d+瓶|用了|换到|移到|挪到|放到|放进|放在)",
+        r"(.+?)(?:吃完了|用完了|扔掉了|打碎了|摔碎了|坏了，?扔掉|坏了|喝了一半|用了\d+个|用了\d+瓶|用了|换到|移到|挪到|放到|放进|放在)",
         r"(.+?)保质期(?:再)?延\s*(\d+)\s*天",
         r"(.+?)(?:的)?保质期(?:一般是|是|为)\s*\d+\s*天",
         r"(.+?)(?:洗|准备吃|下午吃)\s*(?:一盒|一份|一个|一些)?",
@@ -160,6 +160,11 @@ def extract_target_title(text: str) -> str | None:
         if match:
             title = match.group(1).strip(" 把刚才我今天将，,。")
             title = re.sub(r"^(?:知道了[，,]?|好的[，,]?|那就)", "", title).strip()
+            title = re.sub(
+                r"^(?:刚买的|买的|刚入库的|新买的)?(?:那|这)?(?:一)?(?:瓶|盒|袋|包|个|件)",
+                "",
+                title,
+            ).strip()
             return title or None
     return None
 
@@ -685,7 +690,7 @@ def build_chat_result_by_rules(text: str) -> ChatResult:
             operations=[ChatOperation(type="add", item=item) for item in parsed],
         )
 
-    if any(word in text for word in ["扔掉", "扔了", "坏了", "清掉", "丢了吧", "丢了", "丢掉"]):
+    if any(word in text for word in ["扔掉", "扔了", "打碎", "摔碎", "坏了", "清掉", "丢了吧", "丢了", "丢掉"]):
         target = extract_target_title(text)
         return ChatResult(
             intent="remove",

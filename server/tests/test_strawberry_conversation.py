@@ -169,6 +169,25 @@ def test_followup_can_split_variant_from_recent_batch(client: TestClient) -> Non
     assert "可乐 3瓶" not in variant_result["reply"]
 
 
+def test_broken_recent_item_selection_returns_completed_result(client: TestClient) -> None:
+    add_result = _chat(client, "买了一瓶橄榄油")
+    assert add_result["needsConfirmation"] is True
+    _chat(client, "确认")
+
+    broken_result = _chat(client, "哎呀，我不小心把刚买的那瓶橄榄油打碎在地板上了。")
+    assert broken_result["needsConfirmation"] is True
+    assert "橄榄油" in broken_result["reply"]
+
+    completed = _chat(client, "1")
+    assert completed["needsConfirmation"] is False
+    assert "已从库存移除" in completed["reply"]
+    assert "橄榄油" in completed["reply"]
+    assert "正在为您处理" not in completed["reply"]
+
+    items = client.get("/api/items").json()["items"]
+    assert not any(item["title"] == "橄榄油" for item in items)
+
+
 def test_add_can_be_cancelled_through_chat(client: TestClient) -> None:
     add_result = _chat(client, "我刚买了两盒草莓，放进冰箱冷藏层了")
     assert add_result["needsConfirmation"] is True

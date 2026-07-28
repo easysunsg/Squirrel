@@ -173,13 +173,13 @@ def build_squirrel_graph():
         route_after_reentry,
         {
             "resume": "input_router",
-            "new": "reference_resolver",
+            "new": "input_router",
         },
     )
 
-    # reference_resolver → goal_manager → input_router
+    # Entity-dependent context resolution must run after intent extraction.
     graph.add_edge("reference_resolver", "goal_manager")
-    graph.add_edge("goal_manager", "input_router")
+    graph.add_edge("goal_manager", "parameter_resolver")
 
     # snapshot_store → response_generator (挂起快照后直接输出，下次从 START 由 re_entry_router 恢复)
     graph.add_edge("snapshot_store", "response_generator")
@@ -195,8 +195,8 @@ def build_squirrel_graph():
         },
     )
 
-    # intent_classifier → 控制层入口（parameter_resolver）
-    graph.add_edge("intent_classifier", "parameter_resolver")
+    # intent_classifier → reference_resolver → goal_manager → parameter_resolver
+    graph.add_edge("intent_classifier", "reference_resolver")
 
     # 控制层流水线
     graph.add_conditional_edges(

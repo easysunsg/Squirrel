@@ -81,6 +81,7 @@ def match_search_items(
     *,
     exclude_item_id: str | None = None,
     exclude_title: str | None = None,
+    extracted_constraints: SearchConstraints | dict | None = None,
     **kwargs,
 ) -> list[Item]:
     """Apply hard search constraints synchronously, then use semantic search for ranking.
@@ -90,7 +91,16 @@ def match_search_items(
     """
     if kwargs:
         logger.debug("Unused search arguments: %s", sorted(kwargs))
-    constraints = extract_search_constraints(text)
+    if isinstance(extracted_constraints, SearchConstraints):
+        constraints = extracted_constraints
+    elif isinstance(extracted_constraints, dict):
+        try:
+            constraints = SearchConstraints.model_validate(extracted_constraints)
+        except ValidationError:
+            logger.warning("Upstream search constraints were invalid; extracting again")
+            constraints = extract_search_constraints(text)
+    else:
+        constraints = extract_search_constraints(text)
 
     def within_constraints(item: Item) -> bool:
         if exclude_item_id and item.id == exclude_item_id:
