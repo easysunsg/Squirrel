@@ -9,7 +9,10 @@
 
 import json
 import logging
+import re
 from datetime import date, datetime
+
+from pydantic import BaseModel, Field, ValidationError
 
 from app.models.schemas import Item
 from app.services.llm import llm_service
@@ -18,6 +21,30 @@ from app.services.temperature import _check_temperature_zone
 from app.services.vector_store import vector_store
 
 logger = logging.getLogger(__name__)
+
+EXPIRE_WARNING_DAYS = 3
+MIN_PARTIAL_MATCH_LENGTH = 2
+NO_EXPIRE_SORT_KEY = float("inf")
+FUZZY_LOCATION_CHARS = frozenset({"柜", "架", "层", "门"})
+VALID_SEARCH_CATEGORIES = frozenset({
+    "", "food", "beverage", "medicine", "electronics", "cosmetics", "book", "other",
+})
+BEVERAGE_TERMS = (
+    "牛奶", "酸奶", "豆奶", "奶茶", "果汁", "蔬菜汁", "橙汁", "苹果汁", "葡萄汁",
+    "可乐", "雪碧", "汽水", "矿泉水", "苏打水", "巴黎水", "饮料", "啤酒", "红酒",
+    "白酒", "咖啡", "茶", "椰子水", "气泡水", "功能饮料", "乳酸菌",
+)
+
+
+class SearchConstraints(BaseModel):
+    """Internal DTO for constraints extracted from an inventory search request."""
+
+    keyword: str = Field(default="", description="核心搜索词，如'牛奶'、'洗衣液'")
+    location_hint: str = Field(default="", description="位置描述，如'冰箱第二层'、'阳台柜子'")
+    category: str = Field(default="", description="库存物品类别或虚拟检索类别 beverage")
+    temperature_zone: str = Field(default="any", description="温区：cold/frozen/room/any")
+    attributes: list[str] = Field(default_factory=list, description="附加属性，如['盘装','大瓶','快过期']")
+    exclude: list[str] = Field(default_factory=list, description="排除条件")
 
 
 # ==============================
@@ -31,7 +58,6 @@ def summarize_titles(items: list[Item], limit: int = 6) -> str:
 
 def _is_pronoun_or_garbage_target(target: str) -> bool:
     """检测 LLM 提取的 target 是否为代词或垃圾短语，需回退到上下文。"""
-    import re as re_mod
     pronouns = {"这个", "那个", "这些", "那些", "它", "它们", "这东西", "那东西",
                 "这些东西", "那些东西", "这", "那", "该物品", "刚才说的", "上回说的"}
     if target in pronouns:
@@ -40,7 +66,7 @@ def _is_pronoun_or_garbage_target(target: str) -> bool:
     if any(target.startswith(p) for p in ("这个", "那个", "这些", "那些", "它", "它们", "这东西", "那东西", "该物品")):
         return True
     # 包含"处理过的/已处理的/吃过的/用过的"等说明性后缀 → 用户是在解释原因
-    if re_mod.search(r"已?[处理吃用]\s*过\s*的", target):
+    if re.search(r"已?[处理吃用]\s*过\s*的", target):
         return True
     # 纯说明性短语 / 垃圾值——以动词/形容词开头且长度超过 3 个字
     garbage_prefixes = ("已处理", "处理过", "吃过", "用过", "刚刚", "刚才", "那个", "已经")
@@ -62,6 +88,8 @@ def match_search_items(
     LangGraph currently invokes its nodes synchronously.  Keeping this helper synchronous is
     important: returning an awaitable here makes query_handler_node try to slice a coroutine.
     """
+    if kwargs:
+        logger.debug("Unused search arguments: %s", sorted(kwargs))
     constraints = extract_search_constraints(text)
 
     def within_constraints(item: Item) -> bool:
@@ -69,15 +97,21 @@ def match_search_items(
             return False
         if exclude_title and item.title == exclude_title:
             return False
-        if constraints.exclude and any(name in item.title for name in constraints.exclude):
-            return False
+        if constraints.exclude:
+            exclude_haystack = (
+                f"{item.title} {item.location} {item.spaceName} "
+                f"{item.remark or ''} {' '.join(item.tags)}"
+            )
+            if any(name in exclude_haystack for name in constraints.exclude):
+                return False
         # Location constraints are mandatory; semantic resolution supplements text matching.
         if constraints.location_hint:
             location_text = f"{item.spaceName} {item.location}"
             hint = constraints.location_hint
             slot_ids = spatial_service.resolve_location_to_slots(hint)
-            textual_match = hint in location_text or location_text.strip() in hint or (
-                "柜" in hint and "柜" in location_text
+            textual_match = hint in location_text or location_text.strip() in hint or any(
+                hint in {char, f"{char}子"} and char in location_text
+                for char in FUZZY_LOCATION_CHARS
             )
             slot_match = bool(item.belongsToSlotId and item.belongsToSlotId in slot_ids)
             if not textual_match and not slot_match:
@@ -107,32 +141,12 @@ def match_search_items(
     ranked = vector_store.search(constraints.keyword, filtered)
     return (ranked or filtered)[:8]
 
-
-from pydantic import BaseModel, Field
-
-
-class SearchConstraints(BaseModel):
-    """LLM 提取的搜索约束结构"""
-    keyword: str = Field(default="", description="核心搜索词，如'牛奶'、'洗衣液'")
-    location_hint: str = Field(default="", description="位置描述，如'冰箱第二层'、'阳台柜子'")
-    category: str = Field(default="", description="物品类别：food/beverage/daily/medicine/other")
-    temperature_zone: str = Field(default="any", description="温区：cold/frozen/room/any")
-    attributes: list[str] = Field(default_factory=list, description="附加属性，如['盘装','大瓶','快过期']")
-    exclude: list[str] = Field(default_factory=list, description="排除条件")
-
-
-BEVERAGE_TERMS = (
-    "牛奶", "酸奶", "豆奶", "奶茶", "果汁", "汁", "可乐", "雪碧", "汽水", "矿泉水",
-    "苏打水", "巴黎水", "饮料", "啤酒", "红酒", "白酒", "咖啡", "茶",
-)
-
-
 SEARCH_CONSTRAINTS_PROMPT = """你是家庭库存搜索约束提取器。请从用户话语中提取搜索条件。
 
 只返回一个 JSON 对象，字段必须符合以下定义：
-- keyword: 真正要搜索的物品名；如果用户只问类别，可以填写类别词
+- keyword: 真正要搜索的具体物品名；如果用户只问类别，必须留空字符串
 - location_hint: 原文中的位置描述，例如“冰箱冷藏层”“柜子”；没有则为空字符串
-- category: food、beverage、daily、medicine、other 之一；无法判断则为空字符串
+- category: food、beverage、medicine、electronics、cosmetics、book、other 之一；无法判断则为空字符串
 - temperature_zone: cold、frozen、room、any 之一
 - attributes: 其他必须满足的属性，例如“盘装”“大瓶”“快过期”
 - exclude: 用户明确要求排除的物品名称；没有则为空数组
@@ -159,7 +173,6 @@ def _extract_search_constraints_fallback(text: str) -> SearchConstraints:
     keyword = ""
     if "饮料" in text:
         category = "beverage"
-        keyword = "饮料"
     elif "生鲜" in text:
         category = "food"
 
@@ -178,6 +191,8 @@ def extract_search_constraints(text: str) -> SearchConstraints:
     if not llm_service.enabled:
         return _extract_search_constraints_fallback(text)
 
+    raw = ""
+    payload: object = {}
     try:
         raw = llm_service.extract_raw_json(
             [{"role": "user", "content": SEARCH_CONSTRAINTS_PROMPT.format(text=text)}],
@@ -185,14 +200,23 @@ def extract_search_constraints(text: str) -> SearchConstraints:
         )
         payload = json.loads(raw)
         constraints = SearchConstraints.model_validate(payload)
-        if constraints.temperature_zone not in {"cold", "frozen", "room", "any"}:
-            constraints.temperature_zone = "any"
-        if constraints.category not in {"", "food", "beverage", "daily", "medicine", "other"}:
-            constraints.category = ""
-        return constraints
-    except Exception:
-        logger.exception("LLM search constraint extraction failed; using deterministic fallback")
+    except json.JSONDecodeError:
+        logger.warning("LLM returned non-JSON search constraints: %.100s", raw)
         return _extract_search_constraints_fallback(text)
+    except ValidationError as exc:
+        logger.warning("LLM search constraint schema mismatch: %s", exc)
+        return _extract_search_constraints_fallback(text)
+    except Exception:
+        logger.exception("Unexpected LLM search constraint extraction error; using fallback")
+        return _extract_search_constraints_fallback(text)
+
+    if constraints.temperature_zone not in {"cold", "frozen", "room", "any"}:
+        constraints.temperature_zone = "any"
+    if constraints.category not in VALID_SEARCH_CATEGORIES:
+        constraints.category = ""
+    if constraints.category == "beverage" and constraints.keyword in {"饮料", "饮品", "beverage"}:
+        constraints.keyword = ""
+    return constraints
 
 
 def _match_items_3tier(inventory: list[Item], target: str | None) -> list[Item]:
@@ -202,8 +226,13 @@ def _match_items_3tier(inventory: list[Item], target: str | None) -> list[Item]:
     exact = [item for item in inventory if item.title == target]
     if exact:
         return exact
-    partial = [item for item in inventory if target in item.title or item.title in target]
+    partial = [
+        item for item in inventory
+        if (len(target) >= MIN_PARTIAL_MATCH_LENGTH and target in item.title)
+        or (len(item.title) >= MIN_PARTIAL_MATCH_LENGTH and item.title in target)
+    ]
     if partial:
+        partial.sort(key=lambda item: (target not in item.title, -len(item.title)))
         return partial
     slot_ids = spatial_service.resolve_location_to_slots(target)
     if slot_ids:
@@ -234,7 +263,7 @@ def _build_candidate_lines(candidates: list[Item], target: str | None = None) ->
         days = _calc_expire_days(item)
         if days is not None:
             expire_str = f"{item.expireDate}到期（剩余{days}天"
-            if days <= 3:
+            if days <= EXPIRE_WARNING_DAYS:
                 expire_str += " ⚠️即将过期"
             expire_str += "）"
         else:
@@ -263,7 +292,7 @@ def _build_multi_consume_allocation(selected_items: list[dict], total_deduct: in
     sorted_items = sorted(
         selected_items,
         key=lambda item: (
-            item.get("expire_days") if item.get("expire_days") is not None else 9999,
+            item.get("expire_days") if item.get("expire_days") is not None else NO_EXPIRE_SORT_KEY,
             -item.get("count", 0),
         ),
     )
@@ -287,8 +316,7 @@ def _build_multi_consume_allocation(selected_items: list[dict], total_deduct: in
 
 def _build_multi_consume_reply(selected_items: list[dict], allocation: dict[str, int]) -> str:
     parts = []
-    total_deducted = 0
-    unit_str = "个"
+    unit_totals: dict[str, int] = {}
     for item in selected_items:
         item_id = item.get("id")
         title = item.get("title", "?")
@@ -297,9 +325,8 @@ def _build_multi_consume_reply(selected_items: list[dict], allocation: dict[str,
         location = item.get("location", "?")
         space = item.get("spaceName", "")
         deduct = allocation.get(item_id, 0)
-        unit_str = unit
         if deduct > 0:
-            total_deducted += deduct
+            unit_totals[unit] = unit_totals.get(unit, 0) + deduct
             if deduct >= count:
                 parts.append(f"{space}/{location}的「{title}」：消耗{deduct}{unit}，已用完")
             else:
@@ -307,8 +334,9 @@ def _build_multi_consume_reply(selected_items: list[dict], allocation: dict[str,
                 parts.append(f"{space}/{location}的「{title}」：消耗{deduct}{unit}，剩余{new_count}{unit}")
         else:
             parts.append(f"{space}/{location}的「{title}」：未操作（剩余{count}{unit}）")
-    if total_deducted > 0:
-        parts.append(f"总共消耗{total_deducted}{unit_str}")
+    if unit_totals:
+        summary = "、".join(f"{total}{unit}" for unit, total in unit_totals.items())
+        parts.append(f"总共消耗{summary}")
     return "\n".join(parts)
 
 
