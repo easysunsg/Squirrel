@@ -33,7 +33,8 @@ from app.services.parser import (
     extract_remaining_patch,
     extract_search_keyword,
     infer_search_terms,
-    parse_lightning_text,
+    guess_space,
+    parse_add_items,
     parse_multi_selection,
 )
 from app.services.spatial_service import spatial_service
@@ -445,6 +446,63 @@ def _resolve_inventory_followup(
     return None
 
 
+def _resolve_batch_split_followup(text: str, inventory: list[Item]) -> Dict[str, Any] | None:
+    """Recognize a correction that splits part of an existing batch into a variant/location."""
+    import re as re_mod
+
+    match = re_mod.search(
+        r"(?P<title>[^，,。]+?)里有\s*(?P<count>\d+)\s*"
+        r"(?P<unit>袋|瓶|盒|个|件|包|罐|本|条|把|颗|斤|克|g|kg)"
+        r"\s*是(?P<variant>.+?)的[，,]\s*放(?:到|在|进)?(?P<location>.+?)。?$",
+        text,
+        re_mod.I,
+    )
+    if not match:
+        return None
+
+    source_title = match.group("title").strip(" ，,。")
+    source = next((item for item in inventory if item.title == source_title), None)
+    count = int(match.group("count"))
+    if not source or count <= 0 or count > source.count:
+        return None
+
+    variant = match.group("variant").strip(" ，,。的")
+    location = re_mod.sub(r"[了吧呢]+$", "", match.group("location").strip(" ，,。"))
+    location = re_mod.sub(r"里$", "", location).strip() or "默认层架"
+    if not variant:
+        return None
+
+    new_title = variant if source_title in variant else f"{variant}{source_title}"
+    space_id, space_name = guess_space(location)
+    split_item = source.model_copy(update={
+        "id": None,
+        "instanceId": None,
+        "skuId": None,
+        "title": new_title,
+        "count": count,
+        "unit": match.group("unit"),
+        "spaceId": space_id,
+        "spaceName": space_name,
+        "location": location,
+        "remainingPct": 100,
+        "remark": f"从「{source.title}」批次拆分；{variant}",
+    })
+    return {
+        "intent": "add",
+        "reply_text": f"准备从「{source.title}」中拆出 {count}{source.unit}「{new_title}」。",
+        "extracted_entities": {
+            "target": new_title,
+            "items": [split_item.model_dump()],
+            "split_source": {
+                "id": source.id,
+                "title": source.title,
+                "count": count,
+            },
+        },
+        "current_context_item": _build_context_item(source),
+    }
+
+
 def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
     """【意图分类】LLM 分类 + rule fallback + 近指代消解。"""
     text = state.get("raw_text_input", "")
@@ -493,6 +551,10 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
             "current_context_item": current_context,
         }
 
+    batch_split = _resolve_batch_split_followup(text, inventory)
+    if batch_split:
+        return batch_split
+
     followup = _resolve_inventory_followup(text, last_added, current_context, inventory)
     if followup:
         return followup
@@ -516,7 +578,7 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
                 extracted: Dict[str, Any] = {}
 
                 if intent == "add":
-                    parsed_items = parse_lightning_text(text)
+                    parsed_items = parse_add_items(text)
                     reply_text = f"已识别出 {len(parsed_items)} 件物品，准备入库。"
                     extracted["items"] = [item.model_dump() for item in parsed_items]
                     extracted["item_count"] = len(parsed_items)
@@ -600,7 +662,11 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
         if not target and current_context and current_context.get("title"):
             target = current_context["title"]
         entities["target"] = target
-        entities["items"] = [op.item.model_dump()] if op.item else []
+        entities["items"] = [
+            operation.item.model_dump()
+            for operation in fallback.operations
+            if operation.item is not None
+        ]
         if op.patch:
             entities["patch"] = op.patch
     if intent in ("update_expiry", "update_remark") and not entities.get("target"):

@@ -3,6 +3,7 @@ from app.services.parser import (
     extract_expire_patch,
     extract_location_update,
     extract_target_title,
+    parse_add_items,
     parse_lightning_text,
 )
 
@@ -23,6 +24,35 @@ def test_parse_batch_items():
 
     assert [item.title for item in items] == ["鸡蛋", "香蕉", "猪肉"]
     assert all(item.spaceName == "主厨房" for item in items)
+
+
+def test_parse_batch_items_with_independent_locations():
+    items = parse_lightning_text("刚去超市大采购回来，买了3包吐司放面包机旁，5瓶可乐放冰箱")
+
+    assert [(item.title, item.count, item.unit, item.location) for item in items] == [
+        ("吐司", 3, "包", "面包机旁"),
+        ("可乐", 5, "瓶", "冰箱"),
+    ]
+
+
+def test_parse_add_items_prefers_valid_llm_batch(monkeypatch):
+    from app.services.llm import llm_service
+
+    monkeypatch.setattr(llm_service, "enabled", True)
+    monkeypatch.setattr(
+        llm_service,
+        "extract_raw_json",
+        lambda *_args, **_kwargs: (
+            '{"items":['
+            '{"title":"吐司","count":3,"unit":"包","location":"面包机旁"},'
+            '{"title":"可乐","count":5,"unit":"瓶","location":"冰箱"}'
+            '],"confidence":0.98}'
+        ),
+    )
+
+    items = parse_add_items("刚去超市大采购回来，买了3包吐司放面包机旁，5瓶可乐放冰箱")
+
+    assert [(item.title, item.location) for item in items] == [("吐司", "面包机旁"), ("可乐", "冰箱")]
 
 
 def test_extract_location_update():

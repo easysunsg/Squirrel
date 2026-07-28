@@ -96,11 +96,15 @@ def conflict_batch_resolver_node(state: ExtendedGraphState) -> Dict[str, Any]:
     # ----- ADD 意图 -----
     if intent == "add":
         items_data = entities.get("items", [])
+        split_source = entities.get("split_source")
         total_count = sum(float(item.get("count", 1)) for item in items_data if isinstance(item, dict))
+        pending_patch = {"count": total_count or 1, "items_data": items_data}
+        if isinstance(split_source, dict):
+            pending_patch["split_source"] = split_source
         pending_op = PendingOperation(
             type="add",
             target_sku_title=target_name,
-            patch={"count": total_count or 1, "items_data": items_data},
+            patch=pending_patch,
         )
         summary = "、".join(
             f"{item.get('title', target_name)} {item.get('count', 1)}{item.get('unit', '件')}，存放在{item.get('location', '默认层架')}"
@@ -483,6 +487,18 @@ def mutation_executor_node(state: ExtendedGraphState) -> Dict[str, Any]:
     if pending_op.type == "add":
         add_count = pending_op.patch.get("count", 1.0)
         items_data = pending_op.patch.get("items_data", [])
+        split_source = pending_op.patch.get("split_source")
+        if isinstance(split_source, dict) and split_source.get("id"):
+            new_logs.append({
+                "event_id": f"evt_{datetime.now().timestamp()}_split",
+                "op_type": "consume",
+                "target_instance_id": split_source["id"],
+                "sku_title": split_source.get("title", ""),
+                "delta": -int(split_source.get("count", 0)),
+                "operator_id": user_id,
+                "operator_name": user_name,
+                "timestamp": datetime.now().isoformat(),
+            })
         for item_dict in items_data:
             new_logs.append({
                 "event_id": f"evt_{datetime.now().timestamp()}",

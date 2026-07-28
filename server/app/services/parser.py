@@ -359,19 +359,36 @@ def infer_search_terms(text: str) -> list[str]:
 
 
 def parse_lightning_text(text: str) -> list[Item]:
-    space_id, space_name = guess_space(text)
-    location_match = re.search(r"放(?:在|进|到)?了?(.+?)(?:里|中|$)", text)
-    location = location_match.group(1).strip(" ，,。") if location_match else "默认层架"
-    location = re.sub(r"[了吧呢]+$", "", location).strip() or "默认层架"
-    item_text = re.sub(r"(?:，|,)?\s*(?:都)?放(?:在|进|到)?.*$", "", text)
-    item_text = re.sub(r"^(?:我)?(?:今天|刚刚|刚才|刚)?(?:在[^\s,，买了购入新增存入录入添加]+?)?\s*(?:买了|购入|新增|存入|录入|添加)了?", "", item_text).strip() or text
-    parts = [part.strip() for part in re.split(r"[、和]", item_text) if part.strip()]
+    # Remove conversational purchase context once, then parse each comma-delimited clause.
+    item_text = re.sub(r"^.*?(?:买了|购入|新增|存入|录入|添加)了?", "", text, count=1).strip() or text
+    clauses = [part.strip() for part in re.split(r"[，,；;]", item_text) if part.strip()]
+
+    global_location = ""
+    item_clauses: list[tuple[str, str]] = []
+    for clause in clauses:
+        global_match = re.match(r"^(?:都)?放(?:在|进|到)?了?(.+?)(?:里|中)?[了吧呢]?$", clause)
+        if global_match:
+            global_location = global_match.group(1).strip(" ，,。")
+            continue
+
+        location_match = re.match(r"^(.+?)\s*放(?:在|进|到)?了?(.+?)(?:里|中)?[了吧呢]?$", clause)
+        if location_match:
+            item_clauses.append((location_match.group(1).strip(), location_match.group(2).strip(" ，,。")))
+        else:
+            item_clauses.append((clause, ""))
+
+    parts: list[tuple[str, str]] = []
+    for clause, clause_location in item_clauses:
+        for part in re.split(r"[、和]", clause):
+            if part.strip():
+                parts.append((part.strip(), clause_location or global_location or "默认层架"))
 
     consumed = bool(re.search(r"吃完|用完|扔|坏了|清掉|消耗", text))
     remaining = 0 if consumed else 45 if re.search(r"半|一点", text) else 100
 
     items: list[Item] = []
-    for part in parts:
+    for part, location in parts:
+        space_id, space_name = guess_space(location)
         unit_pattern = r"(袋|瓶|盒|个|件|包|罐|本|条|把|颗|斤|克|g|kg)"
         match = re.match(rf"^(\d+)\s*{unit_pattern}?\s*(.+)$", part, re.I)
 
@@ -415,6 +432,102 @@ def parse_lightning_text(text: str) -> list[Item]:
             )
         )
     return items
+
+
+class AddItemExtraction(BaseModel):
+    title: str
+    count: int = Field(default=1, ge=1)
+    unit: str = "个"
+    location: str = ""
+
+
+class BatchAddExtraction(BaseModel):
+    items: list[AddItemExtraction] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0, le=1)
+
+
+BATCH_ADD_PROMPT = """你是家庭库存批量入库信息提取器。把用户话语中的每件物品分别提取出来。
+
+只返回 JSON：
+{{
+  "items": [
+    {{"title": "物品核心名称", "count": 1, "unit": "个", "location": "该物品的位置"}}
+  ],
+  "confidence": 0.0
+}}
+
+规则：
+- 一句话有多件物品时，items 必须有多条，每件物品绑定自己的数量、单位和位置。
+- “刚去超市”“大采购回来”“买了”等是场景或动作，不是物品名。
+- location 只能包含当前物品的位置，不能包含下一件物品。
+- “都放冰箱”表示此前未单独指定位置的物品都在冰箱。
+- 无法确定位置时 location 留空，不得继承其他物品的独立位置。
+
+示例输入：刚去超市大采购回来，买了3包吐司放面包机旁，5瓶可乐放冰箱
+示例输出：{{"items":[{{"title":"吐司","count":3,"unit":"包","location":"面包机旁"}},{{"title":"可乐","count":5,"unit":"瓶","location":"冰箱"}}],"confidence":0.98}}
+
+用户话语：{text}
+"""
+
+
+_ADD_TITLE_NOISE = ("超市", "采购", "回来", "买了", "购入", "新增", "录入", "添加")
+_QUANTITY_UNIT_PATTERN = re.compile(r"(?:\d+|[一二两三四五六七八九十]+)\s*(?:袋|瓶|盒|个|件|包|罐|本|条|把|颗|斤|克|g|kg)", re.I)
+
+
+def _validate_batch_add_extraction(result: BatchAddExtraction, text: str) -> bool:
+    if not result.items or result.confidence < 0.6:
+        return False
+    expected_count = len(_QUANTITY_UNIT_PATTERN.findall(text))
+    if expected_count > 1 and len(result.items) < expected_count:
+        return False
+    for item in result.items:
+        if not item.title.strip() or any(noise in item.title for noise in _ADD_TITLE_NOISE):
+            return False
+        if "放" in item.location or _QUANTITY_UNIT_PATTERN.search(item.location):
+            return False
+    return True
+
+
+def _items_from_batch_extraction(result: BatchAddExtraction, source_text: str) -> list[Item]:
+    items: list[Item] = []
+    for entity in result.items:
+        location = entity.location.strip() or "默认层架"
+        space_id, space_name = guess_space(location)
+        category = guess_category(entity.title)
+        items.append(Item(
+            title=entity.title.strip(),
+            category=category,
+            spaceId=space_id,
+            spaceName=space_name,
+            location=location,
+            remainingPct=100,
+            expireDate=guess_expire_date(entity.title, category),
+            tag=normalize_tag(100),
+            count=entity.count,
+            unit=entity.unit.strip() or "个",
+            icon=guess_icon(entity.title, space_name),
+            remark=f"由自然语言解析：“{source_text}”。",
+        ))
+    return items
+
+
+def parse_add_items(text: str) -> list[Item]:
+    """Extract one or more add items with the LLM first and deterministic parsing as fallback."""
+    try:
+        from app.services.llm import llm_service
+
+        if llm_service.enabled:
+            response = llm_service.extract_raw_json(
+                [{"role": "user", "content": BATCH_ADD_PROMPT.format(text=text)}],
+                response_format={"type": "json_object"},
+            )
+            result = BatchAddExtraction.model_validate_json(response)
+            if _validate_batch_add_extraction(result, text):
+                return _items_from_batch_extraction(result, text)
+            logger.warning("LLM batch add extraction failed validation; using rule fallback")
+    except Exception:
+        logger.warning("LLM batch add extraction failed; using rule fallback", exc_info=True)
+    return parse_lightning_text(text)
 
 
 # ---------------------------------------------------------------------------
@@ -563,7 +676,7 @@ def extract_intent_with_llm(text: str) -> IntentExtractionResult | None:
 def build_chat_result_by_rules(text: str) -> ChatResult:
     """Rule-based intent matching — the original deterministic fallback."""
     if any(word in text for word in ["买了", "购入", "新增", "存入", "录入", "添加"]):
-        parsed = parse_lightning_text(text)
+        parsed = parse_add_items(text)
         if not parsed:
             return ChatResult(replyText="我没有识别出明确物品，可以换一种说法再试一次。")
         return ChatResult(
@@ -686,7 +799,7 @@ def _build_operations_from_llm(result: IntentExtractionResult, text: str) -> lis
 
     if intent == "add":
         # For add, use the full parser to get complete Item objects (handles batch "鸡蛋、香蕉、猪肉")
-        parsed = parse_lightning_text(text)
+        parsed = parse_add_items(text)
         if parsed:
             return [ChatOperation(type="add", item=item) for item in parsed]
         # Fallback: build a minimal item from LLM-extracted entities

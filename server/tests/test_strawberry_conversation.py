@@ -123,6 +123,43 @@ def test_strawberry_followup_conversation_updates_one_batch(client: TestClient) 
     assert milk_after["remark"] == milk_before["remark"]
 
 
+def test_batch_add_confirmation_keeps_each_item_and_location(client: TestClient) -> None:
+    result = _chat(client, "刚去超市大采购回来，买了3包吐司放面包机旁，5瓶可乐放冰箱")
+
+    assert result["needsConfirmation"] is True
+    items = result["itemSuggestion"]["items"]
+    assert [(item["title"], item["count"], item["unit"], item["location"]) for item in items] == [
+        ("吐司", 3, "包", "面包机旁"),
+        ("可乐", 5, "瓶", "冰箱"),
+    ]
+    assert "刚去超市大采购回来" not in result["reply"]
+    assert "吐司 3包，存放在面包机旁" in result["reply"]
+    assert "可乐 5瓶，存放在冰箱" in result["reply"]
+
+
+def test_followup_can_split_variant_from_recent_batch(client: TestClient) -> None:
+    add_result = _chat(client, "刚去超市大采购回来，买了3包吐司放面包机旁，5瓶可乐放冰箱")
+    assert add_result["needsConfirmation"] is True
+    _chat(client, "确认")
+
+    split_result = _chat(client, "等等，可乐里有2瓶是无糖的，放柜子里了。")
+    assert split_result["needsConfirmation"] is True
+    split_items = split_result["itemSuggestion"]["items"]
+    assert [(item["title"], item["count"], item["location"]) for item in split_items] == [
+        ("无糖可乐", 2, "柜子"),
+    ]
+
+    confirmed = _chat(client, "确认")
+    assert confirmed["needsConfirmation"] is False
+
+    items = client.get("/api/items").json()["items"]
+    cola = next(item for item in items if item["title"] == "可乐")
+    sugar_free = next(item for item in items if item["title"] == "无糖可乐")
+    assert (cola["count"], cola["location"]) == (3, "冰箱")
+    assert (sugar_free["count"], sugar_free["location"]) == (2, "柜子")
+    assert "无糖" in sugar_free["remark"]
+
+
 def test_add_can_be_cancelled_through_chat(client: TestClient) -> None:
     add_result = _chat(client, "我刚买了两盒草莓，放进冰箱冷藏层了")
     assert add_result["needsConfirmation"] is True
