@@ -1,43 +1,20 @@
 ﻿"""Conflict resolution, confirmation, query, and response nodes."""
 
 import logging
-from datetime import date, datetime
-from typing import Any, Dict, List, Literal, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Literal
 from uuid import uuid4
 
-from app.db.sqlite import get_active_snapshot, save_snapshot, save_checkpoint, get_checkpoint
-from app.models.schemas import ChatOperation, ChatResult, Item, RecipeRequest
 from app.models.state import (
-    ActionStatus,
-    AgentAction,
     ExtendedGraphState,
     PendingOperation,
-    UserContext,
-    EventType, SystemEvent, generate_idempotency_key, mutation_log_to_event,
-    merge_audit_logs,
-    version_conflict_check,
 )
-from app.services.planner import plan_actions
-from app.services.capabilities import CapabilityRegistry
-from app.services.idempotency import idempotency_service
-from app.services.event_bus import event_bus
 from app.services.cache import get_recipe_cache, set_recipe_cache
 from app.services.llm import llm_service
 from app.services.markdown import item_status
 from app.services.parser import (
-    build_chat_result,
-    days_from_now,
-    extract_expire_patch,
-    extract_location_update,
-    extract_target_title,
-    extract_remaining_patch,
-    extract_search_keyword,
-    infer_search_terms,
-    parse_lightning_text,
     parse_multi_selection,
 )
-from app.services.spatial_service import spatial_service
-from app.services.vector_store import vector_store
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +27,10 @@ from app.services.graph_utils import (
     _build_multi_remove_reply,
     _build_multi_update_reply,
     _calc_expire_days,
-    _is_pronoun_or_garbage_target,
     _match_items_3tier,
     match_search_items,
-    summarize_titles,
 )
+
 
 # ==============================
 # 节点 3: Conflict & Batch Resolver
@@ -128,7 +104,8 @@ def conflict_batch_resolver_node(state: ExtendedGraphState) -> Dict[str, Any]:
         # 多义性消解
         if len(candidates) > 1:
             # 按临期升序 + 数量降序排序
-            candidates.sort(key=lambda it: (_calc_expire_days(it) if _calc_expire_days(it) is not None else 9999, -it.count))
+            candidates.sort(
+                key=lambda it: (_calc_expire_days(it) if _calc_expire_days(it) is not None else 9999, -it.count))
             candidates = candidates[:6]
             selection = _build_candidate_entries(candidates)
             lines = _build_candidate_lines(candidates, target_name)
@@ -629,15 +606,36 @@ def query_handler_node(state: ExtendedGraphState) -> Dict[str, Any]:
             from app.services.parser import extract_search_keyword
             query = extract_search_keyword(text)
 
+        raw_text = state.get("raw_text_input", "")
+        mentioned_titles = {item.title for item in inventory if item.title and item.title in raw_text}
+        if mentioned_titles:
+            # Specific variants win over their base name: 无糖可乐 over 可乐.
+            query = max(mentioned_titles, key=len)
+
         logger.info("[Query Handler] 数量查询关键词锁定为: %s", query)
 
-        candidates = _match_items_3tier(inventory, query)
+        # A base product query includes named variants, e.g. 可乐 + 无糖可乐.
+        candidates = [
+            item for item in inventory
+            if query and (item.title == query or item.title.endswith(query))
+        ]
+        if not candidates:
+            candidates = _match_items_3tier(inventory, query)
         if not candidates:
             return {"reply_text": f"没有找到「{query or '指定物品'}」相关信息。"}
-        item = candidates[0]
+
+        unit_totals: dict[str, int] = {}
+        for item in candidates:
+            unit_totals[item.unit] = unit_totals.get(item.unit, 0) + item.count
+        total_summary = "、".join(f"{count}{unit}" for unit, count in unit_totals.items())
+        location_summary = "、".join(
+            f"{item.title} {item.count}{item.unit}（{item.spaceName}/{item.location}）"
+            for item in candidates
+        )
+        context_item = _build_context_item(candidates[0]) if len(candidates) == 1 else None
         return {
-            "reply_text": f"「{item.title}」还剩 {item.count}{item.unit}，在 {item.spaceName}{item.location}。",
-            "current_context_item": _build_context_item(item),
+            "reply_text": f"家里共有「{query}」{total_summary}：{location_summary}。",
+            "current_context_item": context_item,
         }
 
     # ------ search_query ------
@@ -752,5 +750,3 @@ def post_process_node(state: ExtendedGraphState) -> Dict[str, Any]:
         "reply_text": state.get("reply_text", "收到，管家已为您处理完毕。"),
         "current_context_item": state.get("current_context_item"),
     }
-
-

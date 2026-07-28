@@ -34,6 +34,7 @@ from app.services.parser import (
     extract_search_keyword,
     infer_search_terms,
     guess_space,
+    is_query_total,
     parse_add_items,
     parse_multi_selection,
 )
@@ -554,6 +555,19 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
     batch_split = _resolve_batch_split_followup(text, inventory)
     if batch_split:
         return batch_split
+
+    if is_query_total(text):
+        mentioned_titles = {item.title for item in inventory if item.title and item.title in text}
+        if mentioned_titles:
+            # Prefer the shortest mentioned title as the product family root: 可乐 over 无糖可乐.
+            target = min(mentioned_titles, key=len)
+            return {
+                "intent": "quantity_query",
+                "reply_text": f"正在统计「{target}」的全部库存。",
+                "extracted_entities": {"target": target},
+                "last_added_item": last_added,
+                "current_context_item": current_context,
+            }
 
     followup = _resolve_inventory_followup(text, last_added, current_context, inventory)
     if followup:

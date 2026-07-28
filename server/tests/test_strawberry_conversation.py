@@ -159,6 +159,15 @@ def test_followup_can_split_variant_from_recent_batch(client: TestClient) -> Non
     assert (sugar_free["count"], sugar_free["location"]) == (2, "柜子")
     assert "无糖" in sugar_free["remark"]
 
+    total_result = _chat(client, "家里现在一共有多少瓶可乐了？")
+    assert "5瓶" in total_result["reply"]
+    assert "可乐 3瓶" in total_result["reply"]
+    assert "无糖可乐 2瓶" in total_result["reply"]
+
+    variant_result = _chat(client, "无糖可乐还有多少瓶？")
+    assert "2瓶" in variant_result["reply"]
+    assert "可乐 3瓶" not in variant_result["reply"]
+
 
 def test_add_can_be_cancelled_through_chat(client: TestClient) -> None:
     add_result = _chat(client, "我刚买了两盒草莓，放进冰箱冷藏层了")
