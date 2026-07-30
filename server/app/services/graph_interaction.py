@@ -145,7 +145,7 @@ def conflict_batch_resolver_node(state: ExtendedGraphState) -> Dict[str, Any]:
         }
 
     # ----- UPDATE 意图 -----
-    if intent in ("update_location", "update_expiry", "update_remaining"):
+    if intent in ("update_location", "update_expiry", "update_remaining", "update_remark"):
         patch = entities.get("patch", {})
         if not candidates:
             return {"reply_text": f"没有找到「{target_name}」相关的物品。"}
@@ -167,9 +167,15 @@ def conflict_batch_resolver_node(state: ExtendedGraphState) -> Dict[str, Any]:
         # 单候选直接确认
         item = candidates[0]
         return {
-            "confirmed_item_id": item.id,
-            "confirmed_patch": patch,
-            "reply_text": f"已更新「{item.title}」。",
+            # Keep execution on the capability path so remarkAppend/location/expiry
+            # patches are normalized by InventoryCapability instead of raw-applied.
+            "extracted_entities": {
+                **entities,
+                "target": item.title,
+                "target_item_id": item.id,
+                "patch": patch,
+            },
+            "reply_text": state.get("reply_text") or f"准备更新「{item.title}」。",
             "current_context_item": _build_context_item(item),
         }
 
@@ -403,22 +409,30 @@ def mutation_executor_node(state: ExtendedGraphState) -> Dict[str, Any]:
         # update 操作：通过 patch 直接修改
         target = next((it for it in inventory if it.id == confirmed_item_id), None)
         if target:
+            patch = dict(confirmed_patch)
+            if "remarkAppend" in patch and "remark" not in patch:
+                append_text = str(patch.pop("remarkAppend") or "").strip()
+                old_remark = target.remark or ""
+                patch["remark"] = f"{old_remark}\n{append_text}" if old_remark and append_text else (append_text or old_remark)
             new_logs.append({
                 "event_id": f"evt_{datetime.now().timestamp()}",
                 "op_type": "update",
                 "target_instance_id": confirmed_item_id,
                 "sku_title": target.title,
-                "patch": confirmed_patch,
+                "patch": patch,
                 "delta": 0,
                 "operator_id": user_id,
                 "operator_name": user_name,
                 "timestamp": datetime.now().isoformat(),
             })
+            if "remark" in patch and patch.get("remark"):
+                reply_text = f"已为「{target.title}」追加备注：{str(confirmed_patch.get('remarkAppend') or patch['remark']).strip()}"
         return {
             "mutation_logs": new_logs,
             "interaction_mode": "normal",
             "pending_operation": None,
             "pending_item_selection": [],
+            "reply_text": reply_text,
         }
 
     if confirmed_item_ids:

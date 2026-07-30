@@ -181,7 +181,7 @@ class LLMService:
 - add: 添加新物品到库存（例如：买了、购入、新增、存入）
 - consume: 消耗物品（例如：用了、吃了一半、喝了）
 - remove: 移除物品（例如：扔掉、打碎、摔碎、坏了、清掉；物品已无法继续使用）
-- update_location: 更新物品位置（例如：换到、移到、放到）
+- update_location: 更新物品位置（例如：换到、移到、放到、搁到、搁在、塞进、摆到）
 - update_expiry: 更新保质期（例如：保质期延长、明天过期）
 - update_remark: 添加或修改备注（例如：每盒500克，把备注加上）
 - expiry_query: 查询临期物品（例如：什么快过期、临期物品）
@@ -197,11 +197,13 @@ class LLMService:
   "intent": "意图类型",
   "entities": {
     "target": "目标物品名称（如果有）",
+    "target_is_valid": 目标是否为具体物品名（布尔值；代词或场景描述为false）,
     "count": 数量（数字，如果有）,
     "unit": "单位（如果有）",
     "location": "位置（如果有）",
     "remaining_pct": 剩余百分比（0-100，如果有）,
-    "expire_days": 保质期天数（如果有）
+    "expire_days": 保质期天数（如果有）,
+    "search_constraints": 搜索约束对象（仅search_query需要，否则为null）
   }
 }"""
 

@@ -245,3 +245,17 @@ def test_add_to_shopping_list_does_not_add_inventory(client: TestClient) -> None
         "unit": "个",
         "status": "pending",
     }
+
+
+def test_remark_followup_persists_to_item_detail(client: TestClient) -> None:
+    add_result = _chat(client, "我刚买了两盒草莓，放进冰箱冷藏层了")
+    assert add_result["needsConfirmation"] is True
+    _chat(client, "确认")
+
+    remark_result = _chat(client, "每盒大概有500克，你把备注加上。")
+    assert "已为「草莓」追加备注" in remark_result["reply"]
+    assert "500" in remark_result["reply"]
+
+    items = client.get("/api/items").json()["items"]
+    strawberry = next(item for item in items if item["title"] == "草莓")
+    assert "500" in (strawberry.get("remark") or "")

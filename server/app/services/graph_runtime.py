@@ -567,6 +567,7 @@ def run_squirrel_graph(
         "confirmed_item_ids": [],
         "confirmed_patch": None,
         "pending_add_items": [],
+        "missing_parameters": [],
     }
 
     result = squirrel_graph.invoke(state)

@@ -599,6 +599,8 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
 
                 elif intent in ("consume", "remove"):
                     target = entities.get("target")
+                    if not entities.get("target_is_valid", True):
+                        target = None
                     # 代词/垃圾 target 检测：如果 LLM 提取的 target 是代词或"已处理过的物品"等
                     # 无意义短语，忽略它，回退到 current_context
                     if target and _is_pronoun_or_garbage_target(target):
@@ -626,6 +628,8 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
 
                 elif intent == "update_location":
                     target = entities.get("target")
+                    if not entities.get("target_is_valid", True):
+                        target = None
                     if target and _is_pronoun_or_garbage_target(target):
                         target = None
                     if not target and current_context and current_context.get("title"):
@@ -639,6 +643,8 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
 
                 elif intent in ("update_expiry", "update_remark"):
                     target = entities.get("target")
+                    if not entities.get("target_is_valid", True):
+                        target = None
                     if not target and current_context and current_context.get("title"):
                         target = current_context["title"]
                     expire_days = entities.get("expire_days")
@@ -649,6 +655,8 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
                 elif intent in ("quantity_query", "location_query", "search_query", "recipe"):
                     # 将大模型识别到的 target 或 keyword 保留下来
                     extracted["target"] = entities.get("target") or entities.get("keyword")
+                    if intent == "search_query" and isinstance(entities.get("search_constraints"), dict):
+                        extracted["search_constraints"] = entities["search_constraints"]
 
                 logger.info("LLM intent classification succeeded intent=%s", intent)
                 return {
@@ -685,6 +693,17 @@ def intent_classifier_node(state: ExtendedGraphState) -> Dict[str, Any]:
         ]
         if op.patch:
             entities["patch"] = op.patch
+        if intent == "shopping_add":
+            patch = op.patch or {}
+            entities["list_name"] = patch.get("listName") or "采购清单"
+            entities["count"] = patch.get("count") or 1
+            entities["unit"] = patch.get("unit") or "个"
+    elif intent == "quantity_query":
+        mentioned_titles = {item.title for item in inventory if item.title and item.title in text}
+        if mentioned_titles:
+            entities["target"] = max(mentioned_titles, key=len)
+        else:
+            entities["target"] = extract_search_keyword(text)
     if intent in ("update_expiry", "update_remark") and not entities.get("target"):
         focus = last_added or current_context
         if focus and focus.get("title"):

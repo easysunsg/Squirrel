@@ -106,7 +106,7 @@ def parameter_resolver_node(state: ExtendedGraphState) -> Dict[str, Any]:
             },
         }
 
-    return {}
+    return {"missing_parameters": []}
 
 
 def route_after_parameter_resolve(state: ExtendedGraphState) -> Literal["ready", "missing"]:

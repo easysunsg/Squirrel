@@ -12,8 +12,16 @@ import logging
 import re
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import ValidationError
 
+from app.core.constants import (
+    EXPIRE_WARNING_DAYS,
+    FUZZY_LOCATION_CHARS,
+    MIN_PARTIAL_MATCH_LENGTH,
+    NO_EXPIRE_SORT_KEY,
+    VALID_INVENTORY_CATEGORIES,
+)
+from app.models.extraction import SearchConstraints
 from app.models.schemas import Item
 from app.services.llm import llm_service
 from app.services.spatial_service import spatial_service
@@ -22,29 +30,14 @@ from app.services.vector_store import vector_store
 
 logger = logging.getLogger(__name__)
 
-EXPIRE_WARNING_DAYS = 3
-MIN_PARTIAL_MATCH_LENGTH = 2
-NO_EXPIRE_SORT_KEY = float("inf")
-FUZZY_LOCATION_CHARS = frozenset({"柜", "架", "层", "门"})
 VALID_SEARCH_CATEGORIES = frozenset({
-    "", "food", "beverage", "medicine", "electronics", "cosmetics", "book", "other",
+    "", "beverage", *VALID_INVENTORY_CATEGORIES,
 })
 BEVERAGE_TERMS = (
     "牛奶", "酸奶", "豆奶", "奶茶", "果汁", "蔬菜汁", "橙汁", "苹果汁", "葡萄汁",
     "可乐", "雪碧", "汽水", "矿泉水", "苏打水", "巴黎水", "饮料", "啤酒", "红酒",
     "白酒", "咖啡", "茶", "椰子水", "气泡水", "功能饮料", "乳酸菌",
 )
-
-
-class SearchConstraints(BaseModel):
-    """Internal DTO for constraints extracted from an inventory search request."""
-
-    keyword: str = Field(default="", description="核心搜索词，如'牛奶'、'洗衣液'")
-    location_hint: str = Field(default="", description="位置描述，如'冰箱第二层'、'阳台柜子'")
-    category: str = Field(default="", description="库存物品类别或虚拟检索类别 beverage")
-    temperature_zone: str = Field(default="any", description="温区：cold/frozen/room/any")
-    attributes: list[str] = Field(default_factory=list, description="附加属性，如['盘装','大瓶','快过期']")
-    exclude: list[str] = Field(default_factory=list, description="排除条件")
 
 
 # ==============================
@@ -273,7 +266,8 @@ def _build_candidate_lines(candidates: list[Item], target: str | None = None) ->
         days = _calc_expire_days(item)
         if days is not None:
             expire_str = f"{item.expireDate}到期（剩余{days}天"
-            if days <= EXPIRE_WARNING_DAYS:
+            warning_days = EXPIRE_WARNING_DAYS.get(item.category, EXPIRE_WARNING_DAYS["default"])
+            if days <= warning_days:
                 expire_str += " ⚠️即将过期"
             expire_str += "）"
         else:

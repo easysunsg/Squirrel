@@ -4,18 +4,17 @@ import re
 from datetime import date, timedelta
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
-
+from app.core.constants import (
+    DEFAULT_REMAINING_PCT,
+    TAG_LOW_THRESHOLD,
+    TAG_URGENT_THRESHOLD,
+    VALID_INVENTORY_CATEGORIES,
+    VALID_ITEM_ICONS,
+)
+from app.models.extraction import BatchAddExtraction, IntentExtractionResult
 from app.models.schemas import ChatOperation, ChatResult, InventoryCategory, Item
 
 logger = logging.getLogger(__name__)
-
-
-SPACE_KEYWORDS = {
-    "主厨房": "kitchen",
-    "储藏间": "storage",
-    "车库工具": "garage",
-}
 
 
 CATEGORY_KEYWORDS = {
@@ -41,16 +40,30 @@ def guess_space(text: str) -> tuple[str, str]:
 
 
 def guess_category(title: str) -> InventoryCategory:
-    """Guess the inventory category based on item title."""
-    if re.search(r"蛋|奶|肉|菜|果|草莓|莓|香蕉|苹果|葡萄|面包|米|面|水|饮|酒|茶|豆|酱|醋|油|糖|粉|料", title):
-        return "food"
-    if re.search(r"药|维C|维生素|感冒|消炎|止痛|胶囊", title):
-        return "medicine"
-    if re.search(r"沐浴|洗发|洗面|洁面|香皂|皂|牙膏|牙刷|护肤|化妆品|洁", title):
+    """Conservative category fallback used only when extraction omitted a category."""
+    cosmetics_terms = (
+        "洗面奶", "沐浴露", "洗发水", "洁面", "香皂", "牙膏", "牙刷",
+        "护肤", "化妆品", "精华液", "防晒", "面膜", "乳液", "洗手液",
+    )
+    medicine_terms = (
+        "感冒药", "维生素", "维C", "消炎药", "止痛药", "胶囊", "药片",
+        "创可贴", "碘伏", "酒精棉", "眼药水", "退烧药",
+    )
+    food_terms = (
+        "鸡蛋", "牛奶", "酸奶", "猪肉", "牛肉", "鸡肉", "蔬菜", "水果",
+        "面包", "吐司", "大米", "面条", "饮料", "果汁", "啤酒", "红酒",
+        "白酒", "咖啡", "茶叶", "豆腐", "酱油", "食醋", "食用油", "橄榄油",
+        "白糖", "面粉", "调料", "草莓", "香蕉", "苹果", "葡萄", "西瓜", "橘子", "油麦菜",
+    )
+    if any(term in title for term in cosmetics_terms):
         return "cosmetics"
-    if re.search(r"书|本|杂志|册|字典|刊", title):
+    if any(term in title for term in medicine_terms):
+        return "medicine"
+    if any(term in title for term in food_terms):
+        return "food"
+    if any(term in title for term in ("书籍", "杂志", "字典", "笔记本")):
         return "book"
-    if re.search(r"电器|充电|电池|灯|开关|线|插头|适配器|充电器", title):
+    if any(term in title for term in ("充电器", "电池", "数据线", "适配器", "台灯", "插头")):
         return "electronics"
     return "other"
 
@@ -80,22 +93,18 @@ def guess_icon(title: str, space_name: str) -> str:
 
 
 def guess_expire_date(title: str, category: str | None = None) -> str | None:
-    """Guess expire date based on title and category.
-    Returns None for non-consumable categories (book, electronics, other).
-    """
-    if category in ("book", "electronics", "other"):
-        return None
-    if re.search(r"菜|肉|奶|酸奶|水果|香蕉|鸡蛋|面包", title):
-        return days_from_now(5)
-    if re.search(r"药|维", title):
-        return days_from_now(365)
-    return days_from_now(180)
+    """Return a date only for a very small set of high-confidence fresh foods."""
+    if re.search(r"鲜奶|鲜牛奶|生牛奶", title):
+        return days_from_now(7)
+    if re.search(r"绿叶菜|生菜|菠菜|青菜", title):
+        return days_from_now(3)
+    return None
 
 
 def normalize_tag(remaining: int) -> str:
-    if remaining < 20:
+    if remaining < TAG_URGENT_THRESHOLD:
         return "告急"
-    if remaining < 50:
+    if remaining < TAG_LOW_THRESHOLD:
         return "较低"
     return "充足"
 
@@ -149,8 +158,8 @@ def chinese_numeral_to_int(text: str) -> tuple[int, str] | None:
 def extract_target_title(text: str) -> str | None:
     cleaned = text.strip(" ，,。！？?；;")
     patterns = [
-        r"把(.+?)(?:吃完|用完|扔掉|扔了|打碎|摔碎|坏了|喝了一半|用了\d+个|用了\d+瓶|用了|换到|移到|挪到|放到|放进|放在)",
-        r"(.+?)(?:吃完了|用完了|扔掉了|打碎了|摔碎了|坏了，?扔掉|坏了|喝了一半|用了\d+个|用了\d+瓶|用了|换到|移到|挪到|放到|放进|放在)",
+        r"把(.+?)(?:吃完|用完|扔掉|扔了|打碎|摔碎|坏了|喝了一半|用了\d+个|用了\d+瓶|用了|换到|移到|挪到|放到|放进|放在|搁到|搁在|塞进|摆到|摆在)",
+        r"(.+?)(?:吃完了|用完了|扔掉了|打碎了|摔碎了|坏了，?扔掉|坏了|喝了一半|用了\d+个|用了\d+瓶|用了|换到|移到|挪到|放到|放进|放在|搁到|搁在|塞进|摆到|摆在)",
         r"(.+?)保质期(?:再)?延\s*(\d+)\s*天",
         r"(.+?)(?:的)?保质期(?:一般是|是|为)\s*\d+\s*天",
         r"(.+?)(?:洗|准备吃|下午吃)\s*(?:一盒|一份|一个|一些)?",
@@ -170,7 +179,7 @@ def extract_target_title(text: str) -> str | None:
 
 
 def extract_location_update(text: str) -> str | None:
-    match = re.search(r"(?:换到|移到|挪到|放到|放进|放在)(.+)$", text)
+    match = re.search(r"(?:换到|移到|挪到|放到|放进|放在|搁到|搁在|塞进|摆到|摆在)(.+)$", text)
     if not match:
         return None
     return match.group(1).strip(" ，,。里中") or None
@@ -244,30 +253,28 @@ def grouped_inventory_summary(items: list) -> str:
     sorted_keys = sorted(groups.keys(), key=lambda k: (k[0], k[1]))
 
     lines = ["【松鼠库存统计汇总】"]
-    total_count = 0
-    total_unit = "个"
+    total_by_unit: dict[str, int] = {}
 
     for idx, (space, loc) in enumerate(sorted_keys, 1):
         group_items = groups[(space, loc)]
         group_items.sort(key=lambda it: it.title)
 
         item_parts = []
-        group_subtotal = 0
-        unit = "个"
+        group_by_unit: dict[str, int] = {}
 
         for item in group_items:
             count = item.count or 1
-            group_subtotal += count
             unit = item.unit or "个"
+            group_by_unit[unit] = group_by_unit.get(unit, 0) + count
+            total_by_unit[unit] = total_by_unit.get(unit, 0) + count
             item_parts.append(f"{item.title}×{count}{unit}")
 
-        total_count += group_subtotal
-        total_unit = unit
-
         items_str = "、".join(item_parts)
-        lines.append(f"{idx}. {space}/{loc}：{items_str} → 小计{group_subtotal}{unit}")
+        subtotal = "、".join(f"{count}{unit}" for unit, count in group_by_unit.items())
+        lines.append(f"{idx}. {space}/{loc}：{items_str} → 小计{subtotal}")
 
-    lines.append(f"✅ 全部库存总存量：{total_count}{total_unit}")
+    total_summary = "、".join(f"{count}{unit}" for unit, count in total_by_unit.items()) or "0个"
+    lines.append(f"✅ 全部库存总存量：{total_summary}")
     lines.append("")
     lines.append("如需调整物品存放位置/消耗，可以告诉我目标操作。")
 
@@ -371,12 +378,12 @@ def parse_lightning_text(text: str) -> list[Item]:
     global_location = ""
     item_clauses: list[tuple[str, str]] = []
     for clause in clauses:
-        global_match = re.match(r"^(?:都)?放(?:在|进|到)?了?(.+?)(?:里|中)?[了吧呢]?$", clause)
+        global_match = re.match(r"^(?:都)?(?:放|搁|塞|存|摆|丢进)(?:在|进|到)?了?(.+?)(?:里|中)?[了吧呢]?$", clause)
         if global_match:
             global_location = global_match.group(1).strip(" ，,。")
             continue
 
-        location_match = re.match(r"^(.+?)\s*放(?:在|进|到)?了?(.+?)(?:里|中)?[了吧呢]?$", clause)
+        location_match = re.match(r"^(.+?)\s*(?:放|搁|塞|存|摆|丢进)(?:在|进|到)?了?(.+?)(?:里|中)?[了吧呢]?$", clause)
         if location_match:
             item_clauses.append((location_match.group(1).strip(), location_match.group(2).strip(" ，,。")))
         else:
@@ -388,8 +395,7 @@ def parse_lightning_text(text: str) -> list[Item]:
             if part.strip():
                 parts.append((part.strip(), clause_location or global_location or "默认层架"))
 
-    consumed = bool(re.search(r"吃完|用完|扔|坏了|清掉|消耗", text))
-    remaining = 0 if consumed else 45 if re.search(r"半|一点", text) else 100
+    remaining = DEFAULT_REMAINING_PCT
 
     items: list[Item] = []
     for part, location in parts:
@@ -439,24 +445,16 @@ def parse_lightning_text(text: str) -> list[Item]:
     return items
 
 
-class AddItemExtraction(BaseModel):
-    title: str
-    count: int = Field(default=1, ge=1)
-    unit: str = "个"
-    location: str = ""
-
-
-class BatchAddExtraction(BaseModel):
-    items: list[AddItemExtraction] = Field(default_factory=list)
-    confidence: float = Field(default=0.0, ge=0, le=1)
-
-
 BATCH_ADD_PROMPT = """你是家庭库存批量入库信息提取器。把用户话语中的每件物品分别提取出来。
 
 只返回 JSON：
 {{
   "items": [
-    {{"title": "物品核心名称", "count": 1, "unit": "个", "location": "该物品的位置"}}
+    {{"title": "物品核心名称", "count": 1, "unit": "个", "location": "该物品的位置",
+      "category": "food|medicine|electronics|cosmetics|book|other 或空字符串",
+      "space_hint": "用户明确提到的空间名称或空字符串",
+      "expire_hint": "YYYY-MM-DD、+Nd、+N天或空字符串",
+      "icon_hint": "合法图标名或空字符串"}}
   ],
   "confidence": 0.0
 }}
@@ -467,9 +465,12 @@ BATCH_ADD_PROMPT = """你是家庭库存批量入库信息提取器。把用户�
 - location 只能包含当前物品的位置，不能包含下一件物品。
 - “都放冰箱”表示此前未单独指定位置的物品都在冰箱。
 - 无法确定位置时 location 留空，不得继承其他物品的独立位置。
+- category 只能使用给定枚举；不能确定时留空，禁止编造类别。
+- expire_hint 只提取用户明确说出的日期或期限；未提及时必须留空。
+- icon_hint 不能确定时留空。
 
 示例输入：刚去超市大采购回来，买了3包吐司放面包机旁，5瓶可乐放冰箱
-示例输出：{{"items":[{{"title":"吐司","count":3,"unit":"包","location":"面包机旁"}},{{"title":"可乐","count":5,"unit":"瓶","location":"冰箱"}}],"confidence":0.98}}
+示例输出：{{"items":[{{"title":"吐司","count":3,"unit":"包","location":"面包机旁","category":"food","space_hint":"","expire_hint":"","icon_hint":"bakery_dining"}},{{"title":"可乐","count":5,"unit":"瓶","location":"冰箱","category":"food","space_hint":"主厨房","expire_hint":"","icon_hint":"local_drink"}}],"confidence":0.98}}
 
 用户话语：{text}
 """
@@ -490,15 +491,41 @@ def _validate_batch_add_extraction(result: BatchAddExtraction, text: str) -> boo
             return False
         if "放" in item.location or _QUANTITY_UNIT_PATTERN.search(item.location):
             return False
+        if item.category and item.category not in VALID_INVENTORY_CATEGORIES:
+            return False
+        if item.icon_hint and item.icon_hint not in VALID_ITEM_ICONS:
+            return False
     return True
+
+
+def _resolve_expire_hint(expire_hint: str) -> str | None:
+    hint = expire_hint.strip()
+    if not hint:
+        return None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", hint):
+        try:
+            date.fromisoformat(hint)
+            return hint
+        except ValueError:
+            return None
+    relative = re.fullmatch(r"\+?(\d+)\s*(?:d|天)", hint, re.I)
+    if relative:
+        return days_from_now(int(relative.group(1)))
+    return None
 
 
 def _items_from_batch_extraction(result: BatchAddExtraction, source_text: str) -> list[Item]:
     items: list[Item] = []
     for entity in result.items:
         location = entity.location.strip() or "默认层架"
-        space_id, space_name = guess_space(location)
-        category = guess_category(entity.title)
+        space_id, space_name = guess_space(entity.space_hint.strip() or location)
+        category: InventoryCategory = (
+            entity.category if entity.category in VALID_INVENTORY_CATEGORIES else guess_category(entity.title)
+        )
+        expire_date = _resolve_expire_hint(entity.expire_hint)
+        if not expire_date:
+            expire_date = guess_expire_date(entity.title, category)
+        icon = entity.icon_hint if entity.icon_hint in VALID_ITEM_ICONS else guess_icon(entity.title, space_name)
         items.append(Item(
             title=entity.title.strip(),
             category=category,
@@ -506,11 +533,11 @@ def _items_from_batch_extraction(result: BatchAddExtraction, source_text: str) -
             spaceName=space_name,
             location=location,
             remainingPct=100,
-            expireDate=guess_expire_date(entity.title, category),
+            expireDate=expire_date,
             tag=normalize_tag(100),
             count=entity.count,
             unit=entity.unit.strip() or "个",
-            icon=guess_icon(entity.title, space_name),
+            icon=icon,
             remark=f"由自然语言解析：“{source_text}”。",
         ))
     return items
@@ -540,28 +567,6 @@ def parse_add_items(text: str) -> list[Item]:
 # ---------------------------------------------------------------------------
 
 
-class IntentExtractionResult(BaseModel):
-    """Structured output schema for LLM intent extraction."""
-
-    intent: str = Field(
-        description="用户意图，只能取以下枚举值：add, shopping_add, consume, remove, update_location, "
-        "update_expiry, update_remark, quantity_query, query_total, location_query, expiry_query, "
-        "idle_query, recipe, search_query, chat"
-    )
-    item_name: str = Field(default="", description="物品名称，提取不到则为空字符串")
-    quantity: Optional[int] = Field(default=None, description="物品数量，提取不到则为null")
-    location: str = Field(default="", description="存放位置，提取不到则为空字符串")
-    expire_date: str = Field(
-        default="",
-        description="保质期/过期时间，格式为YYYY-MM-DD绝对日期或+Nd相对天数（如+7d表示7天后）；提取不到则为空字符串"
-    )
-    remaining_pct: Optional[int] = Field(
-        default=None,
-        description="消耗后的剩余百分比（0-100），如'吃完'→0，'用了一半'→50；提取不到则为null"
-    )
-    confidence: float = Field(description="识别置信度，0-1之间，低于0.6则视为无法识别")
-
-
 INTENT_EXTRACT_PROMPT = """## 角色定位
 你是家庭物品管理系统的专属意图识别与实体提取助手。你的唯一任务是从用户输入中精准识别用户意图、提取结构化实体参数，严格按照指定JSON格式输出结果，禁止输出任何解释、说明、markdown格式、代码块等额外内容，只输出纯JSON。
 
@@ -574,6 +579,7 @@ INTENT_EXTRACT_PROMPT = """## 角色定位
     "location": "字符串，必填，提取到的存放位置，包含层级描述；提取不到则为空字符串",
     "expire_date": "字符串，必填，保质期/过期时间；绝对日期用YYYY-MM-DD格式（如2025-12-31）；相对天数用+Nd格式（如+7d表示7天后、+30d表示30天后）；提取不到则为空字符串",
     "remaining_pct": "整数/Null，必填，消耗后剩余百分比（0-100）；'吃完/用完'→0，'用了一半/吃了一半'→50，'还剩30%'→30；与消耗无关或提取不到则为null",
+    "target_is_valid": "布尔值，必填；item_name 是具体物品名时为true，代词、场景描述或无效目标时为false",
     "confidence": "浮点数，必填，0-1之间的识别置信度，保留2位小数"
 }}
 ```
@@ -601,6 +607,7 @@ INTENT_EXTRACT_PROMPT = """## 角色定位
 3. location（位置）：提取完整位置层级描述（如"冰箱中层""车库A4搁板"）；只提取目标位置，不提取来源位置；提取不到时留空
 4. expire_date（保质期）：仅在update_expiry意图中提取；用户说"延长N天"→+Nd格式；用户说具体日期→YYYY-MM-DD；"明天过期"→+1d；"下周过期"→+7d；提取不到时留空字符串
 5. remaining_pct（剩余百分比）：仅在consume意图中提取；"吃完/用完/吃掉了"→0；"一半/半"→50；"还剩30%"→30；与消耗无关时为null
+6. target_is_valid：item_name 为“这个、那个、它、刚才说的”等指代或场景描述时必须为false；具体物品名为true
 
 ## 置信度评分标准
 - 0.90~1.00：意图100%明确，物品名称、关键参数清晰无歧义
@@ -680,6 +687,28 @@ def extract_intent_with_llm(text: str) -> IntentExtractionResult | None:
 
 def build_chat_result_by_rules(text: str) -> ChatResult:
     """Rule-based intent matching — the original deterministic fallback."""
+    if any(term in text for term in ("采购清单", "购物清单", "待购清单")) and any(
+        term in text for term in ("加入", "加到", "加上", "添加")
+    ):
+        title_match = re.search(r"把\s*(.+?)\s*(?:加入|加到|添加到)", text)
+        if not title_match:
+            title_match = re.search(r"(?:加上|添加)\s*[\"“]?(.+?)[\"”]?(?:。|$)", text)
+        title = title_match.group(1).strip(" \"“”。，,") if title_match else ""
+        list_match = re.search(r"((?:未来|周末|家庭|我们的)?(?:采购|购物|待购)清单)", text)
+        list_name = list_match.group(1) if list_match else "采购清单"
+        list_name = list_name.removeprefix("我们的")
+        return ChatResult(
+            intent="shopping_add",
+            replyText=f"正在将「{title}」加入{list_name}。",
+            operations=[
+                ChatOperation(
+                    type="add",
+                    target=title or None,
+                    patch={"listName": list_name, "count": 1, "unit": "个"},
+                )
+            ],
+        )
+
     if any(word in text for word in ["买了", "购入", "新增", "存入", "录入", "添加"]):
         parsed = parse_add_items(text)
         if not parsed:
@@ -718,7 +747,7 @@ def build_chat_result_by_rules(text: str) -> ChatResult:
                 operations=[ChatOperation(type="update", target=target, patch={"remarkAppend": remark})],
             )
 
-    if any(word in text for word in ["换到", "移到", "挪到", "放到", "放进", "放在"]):
+    if any(word in text for word in ["换到", "移到", "挪到", "放到", "放进", "放在", "搁到", "搁在", "塞进", "摆到", "摆在"]):
         target = extract_target_title(text)
         location = extract_location_update(text)
         if target and location and not any(word in text for word in ["买了", "新增", "录入", "添加"]):
@@ -748,12 +777,9 @@ def build_chat_result_by_rules(text: str) -> ChatResult:
         return ChatResult(intent="query_total", replyText="正在统计全部库存。")
 
     if any(word in text for word in ["还剩", "还有几个", "还有多少", "有多少", "几个", "多少"]):
-        # 数量查询：提取物品名称，按名称精准匹配
-        search_terms = re.sub(r"[我你要看查还有剩几个多少在哪哪里]", "", text).strip()
         return ChatResult(
             intent="quantity_query",
             replyText="正在查询物品数量。",
-            operations=[ChatOperation(type="consume", target=search_terms or text)],
         )
 
     if any(word in text for word in ["放了很久", "很久没动", "闲置"]):
@@ -774,6 +800,7 @@ def build_chat_result_by_rules(text: str) -> ChatResult:
 
 _INTENT_REPLY_MAP: dict[str, str] = {
     "add": "已识别出物品，准备入库。",
+    "shopping_add": "正在加入采购清单。",
     "consume": "我会尝试更新该物品的消耗情况。",
     "remove": "我会尝试将对应物品移出库存。",
     "update_location": "我会尝试更新该物品的位置。",
@@ -796,7 +823,7 @@ def _build_operations_from_llm(result: IntentExtractionResult, text: str) -> lis
     Regex-based helpers are only used as a last resort when the LLM didn't extract the entity.
     """
     intent = result.intent
-    item_name = result.item_name
+    item_name = result.item_name if result.target_is_valid else ""
     quantity = result.quantity
     location = result.location
     expire_date = result.expire_date
@@ -815,6 +842,21 @@ def _build_operations_from_llm(result: IntentExtractionResult, text: str) -> lis
                 location=location or "默认层架",
             )
             return [ChatOperation(type="add", item=item)]
+        return []
+
+    if intent == "shopping_add":
+        target = item_name or extract_target_title(text) or None
+        list_match = re.search(r"((?:未来|周末|家庭|我们的)?(?:采购|购物|待购)清单)", text)
+        list_name = list_match.group(1) if list_match else "采购清单"
+        list_name = list_name.removeprefix("我们的")
+        if target:
+            return [
+                ChatOperation(
+                    type="add",
+                    target=target,
+                    patch={"listName": list_name, "count": quantity or 1, "unit": "个"},
+                )
+            ]
         return []
 
     if intent == "consume":
@@ -853,9 +895,8 @@ def _build_operations_from_llm(result: IntentExtractionResult, text: str) -> lis
             return [ChatOperation(type="update", target=target)]
 
     if intent == "quantity_query":
-        # LLM entity first, regex cleanup last
-        search_terms = item_name or re.sub(r"[我你要看查还有剩几个多少在哪哪里]", "", text).strip()
-        return [ChatOperation(type="consume", target=search_terms or text)]
+        # Queries are read-only and must never be represented as consume operations.
+        return []
 
     # expiry_query, location_query, idle_query, recipe, search_query, chat → no operations
     return []

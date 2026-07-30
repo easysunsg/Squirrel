@@ -25,6 +25,8 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.models.schemas import Item
+from app.core.config import settings
+from app.services.llm import llm_service
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -88,7 +90,11 @@ def _chat(
 
 def _confirm_add(client: TestClient, result: dict[str, Any]) -> None:
     """If the result contains a pending add operation, confirm it with the
-    suggested items so the inventory is updated."""
+    suggested items so the inventory is updated.
+
+    Prefer the primary /api/chat confirmation path (reply 「确认」). Fall back to
+    /api/chat/confirm when a pendingId is still present.
+    """
     if result.get("needsConfirmation") and result.get("pendingId"):
         pending_id = result["pendingId"]
         items = result.get("itemSuggestion", {}).get("items", [])
@@ -98,6 +104,11 @@ def _confirm_add(client: TestClient, result: dict[str, Any]) -> None:
         )
         # 200 is ok; 404 means the pending already expired — that's fine
         assert cr.status_code in (200, 404)
+        return
+
+    if result.get("needsConfirmation"):
+        confirmed = _chat(client, "确认")
+        assert confirmed.get("reply")
 
 
 def _current_items(client: TestClient) -> list[dict[str, Any]]:
@@ -111,10 +122,19 @@ def _reset(client: TestClient) -> None:
 
 
 @pytest.fixture
-def client():
-    """Each test gets a *fresh* app (and therefore a fresh in-memory SQLite
-    database seeded with the three default items)."""
-    return TestClient(create_app())
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Each test gets an isolated SQLite/data dir so conversation pending state
+    cannot leak across cases (or into the developer's local DB)."""
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "storage_dir", tmp_path / "storage")
+    monkeypatch.setattr(settings, "chroma_enabled", False)
+    monkeypatch.setattr(llm_service, "enabled", False)
+
+    from app.services.vector_store import vector_store
+
+    monkeypatch.setattr(vector_store, "_collection", None)
+    with TestClient(create_app()) as test_client:
+        yield test_client
 
 
 # ===================================================================
@@ -494,6 +514,9 @@ class TestInventoryOperations:
         assert result.get("reply")
         assert result.get("needsConfirmation") in (True, None)
         if result.get("needsConfirmation"):
+            suggestion_items = (result.get("itemSuggestion") or {}).get("items") or []
+            assert any("油麦菜" in (item.get("title") or "") for item in suggestion_items)
+        if result.get("needsConfirmation"):
             _confirm_add(client, result)
             items = _current_items(client)
             assert any("油麦菜" in item["title"] for item in items)
@@ -625,6 +648,14 @@ def run_all_scenarios_and_generate_doc() -> None:
         sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
     warnings.filterwarnings("ignore", category=DeprecationWarning)
 
+    from tempfile import TemporaryDirectory
+
+    # Keep the doc runner off the developer's local DB / conversation state.
+    temp = TemporaryDirectory(prefix="squirrel-daily-doc-")
+    settings.data_dir = Path(temp.name) / "data"
+    settings.storage_dir = Path(temp.name) / "storage"
+    settings.chroma_enabled = False
+    llm_service.enabled = False
     client = TestClient(create_app())
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
 
